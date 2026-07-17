@@ -38,6 +38,36 @@ def provision(
 
 
 @app.command()
+def add(
+    path: str = typer.Argument(..., help="Memory path, e.g. /gotchas/vpn-dns.md"),
+    content: str = typer.Option("", help="Markdown body starting with '# Title' (or use --file / stdin)"),
+    file: Path = typer.Option(None, help="Read the body from a markdown file"),
+    category: str = typer.Option("general", help="onboarding|gotcha|architecture|convention|general"),
+    tags: str = typer.Option("", help="Comma-separated tags"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Store one memory directly — no agent needed. Body comes from --content,
+    --file, or stdin (pipe it in)."""
+    import sys
+
+    if file is not None:
+        body = file.read_text(encoding="utf-8")
+    elif content:
+        body = content
+    elif not sys.stdin.isatty():
+        body = sys.stdin.read()
+    else:
+        raise typer.BadParameter("provide --content, --file, or pipe the body on stdin")
+    service = build_service(_settings(backend, project, search_endpoint))
+    memory = service.create(
+        path, body, category=category, tags=[t.strip() for t in tags.split(",") if t.strip()]
+    )
+    typer.echo(f"+ {memory.path} (v{memory.version}, {memory.category}) '{memory.title}'")
+
+
+@app.command()
 def seed(
     directory: Path = typer.Argument(..., help="Folder of .md memories (frontmatter: path/category/tags)"),
     backend: str = _BACKEND_OPT,
