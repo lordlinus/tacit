@@ -163,24 +163,37 @@ def install(
     search_endpoint: str = typer.Option("", help="Shared AI Search endpoint (omit for local-only)"),
     function_app: str = typer.Option("", help="Deployed Functions app name (remote MCP variant)"),
 ) -> None:
-    """Print ready-to-paste MCP wiring for every client your team uses
-    (Claude Code, VS Code/GHCP, Copilot CLI) plus an AGENTS.md snippet."""
+    """Print ready-to-paste MCP wiring for every client your team uses.
+    With --function-app, leads with the endpoint-only handout (URL + key, no
+    clone); the stdio variants follow as the keyless-per-user alternative."""
     from . import clients
+
+    if function_app:
+        typer.echo("# ====== HAND THIS TO TEAMMATES: MCP endpoint, nothing to install ======\n")
+        typer.echo(f"# Endpoint: {clients.mcp_endpoint(function_app)}")
+        typer.echo("# Key (share via your secret channel, never commit it):")
+        typer.echo(
+            f"#   az functionapp keys list -g <rg> -n {function_app} "
+            "--query systemKeys.mcp_extension -o tsv\n"
+        )
+        typer.echo("# Claude Code:\n")
+        typer.echo(f"    export TACIT_KEY=<key>   # then:")
+        typer.echo(f"    {clients.claude_code_remote_command(function_app)}\n")
+        typer.echo("# VS Code / GitHub Copilot — save as .vscode/mcp.json (prompts for the key):\n")
+        typer.echo(clients.functions_http_json(function_app) + "\n")
+        typer.echo("# ====== Alternative: local stdio (keyless, per-user Entra identity) ======\n")
 
     wiring = clients.Wiring(
         repo_dir=str(Path(__file__).resolve().parents[2]),
         search_endpoint=search_endpoint,
         project=project,
     )
-    typer.echo("# Claude Code (also works for Copilot CLI's `copilot mcp add`):\n")
+    typer.echo("# Claude Code (stdio; needs repo clone + uv + az login):\n")
     typer.echo(f"    {clients.claude_code_command(wiring)}\n")
-    typer.echo("# VS Code / GitHub Copilot — save as .vscode/mcp.json in the project repo:\n")
+    typer.echo("# VS Code / GitHub Copilot stdio — .vscode/mcp.json:\n")
     typer.echo(clients.vscode_mcp_json(wiring) + "\n")
     typer.echo("# Copilot CLI — merge into ~/.copilot/mcp-config.json:\n")
     typer.echo(clients.copilot_cli_json(wiring) + "\n")
-    if function_app:
-        typer.echo("# No-clone remote variant (deployed Functions MCP endpoint, Streamable HTTP):\n")
-        typer.echo(clients.functions_http_json(function_app) + "\n")
     typer.echo("# Add to the project's AGENTS.md / CLAUDE.md so agents actually use it:\n")
     typer.echo(clients.agents_md_snippet(project))
 

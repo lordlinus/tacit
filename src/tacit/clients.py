@@ -76,6 +76,19 @@ def copilot_cli_json(wiring: Wiring) -> str:
     )
 
 
+def mcp_endpoint(function_app: str) -> str:
+    return f"https://{function_app}.azurewebsites.net/runtime/webhooks/mcp"
+
+
+def claude_code_remote_command(function_app: str) -> str:
+    """Endpoint-only wiring for Claude Code — no clone, no uv, no az login.
+    $TACIT_KEY keeps the secret out of shell history and pasted docs."""
+    return (
+        f"claude mcp add --transport http {SERVER_NAME} {mcp_endpoint(function_app)} "
+        '--header "x-functions-key: $TACIT_KEY"'
+    )
+
+
 def functions_http_json(function_app: str) -> str:
     """Remote variant: the Azure Functions MCP endpoint over Streamable HTTP
     (no repo clone needed). VS Code prompts for the key via `inputs`, so the

@@ -42,6 +42,17 @@ def test_vscode_and_copilot_json_shapes():
     assert copilot["mcpServers"]["tacit"]["args"] == server["args"]
 
 
+def test_claude_code_remote_is_endpoint_only():
+    from tacit.clients import claude_code_remote_command, mcp_endpoint
+
+    command = claude_code_remote_command("func-x")
+    assert mcp_endpoint("func-x") == "https://func-x.azurewebsites.net/runtime/webhooks/mcp"
+    assert "--transport http" in command
+    assert "https://func-x.azurewebsites.net/runtime/webhooks/mcp" in command
+    assert "$TACIT_KEY" in command  # env reference, never a literal key
+    assert "uv " not in command and "--directory" not in command  # truly no-clone
+
+
 def test_functions_http_uses_streamable_http_and_prompts_for_key():
     config = json.loads(functions_http_json("func-tacit-abc"))
     server = config["servers"]["tacit"]
