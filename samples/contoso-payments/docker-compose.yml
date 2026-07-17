@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_PASSWORD: localdev
+    ports: ["5432:5432"]
+
+  simulator:
+    image: contoso.azurecr.io/bank-simulator:2.9
+    environment:
+      # One shared key for all clients. The simulator enforces 30 req/min PER
+      # KEY - parallel test runs must derive per-worker keys instead (see
+      # tests/conftest.py and SIMULATOR_KEY_PREFIX in CONTRIBUTING.md).
+      SIMULATOR_API_KEY: local-dev-key
+      SIMULATOR_RATE_LIMIT_PER_MIN: "30"
+    ports: ["8200:8200"]

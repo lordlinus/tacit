@@ -1,0 +1,4 @@
+{"role": "user", "content": "why did we only find out about the staging webhook failures after 13 days?"}
+{"role": "assistant", "content": "The DLQ depth alarm threshold was set to fire only after several days of accumulation. I've lowered it."}
+{"role": "assistant", "content": "GOTCHA: dead-letter queue depth alarms must be thresholded in hours of traffic, not absolute message counts - absolute counts scale wrong between staging and production volumes."}
+{"role": "user", "content": "good, write that down"}

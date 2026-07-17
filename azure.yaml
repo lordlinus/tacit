@@ -1,0 +1,15 @@
+# azd project: `azd up` provisions infra/main.bicep and deploys the Functions app.
+name: foundry-memory
+metadata:
+  template: foundry-memory@0.1.0
+services:
+  api:
+    project: ./functions
+    language: python
+    host: function
+    hooks:
+      prepackage:
+        shell: sh
+        run: ../scripts/sync_functions.sh
+infra:
+  path: infra

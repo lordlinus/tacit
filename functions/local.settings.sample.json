@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "FOUNDRY_MEMORY_BACKEND": "search",
+    "FOUNDRY_MEMORY_SEARCH_ENDPOINT": "https://<your-search>.search.windows.net",
+    "FOUNDRY_MEMORY_PROJECT": "contoso-payments",
+    "FOUNDRY_MEMORY_AUTH_MODE": "azure-cli"
+  }
+}

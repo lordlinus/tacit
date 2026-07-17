@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" && make proto
+      - run: ruff check .
+      - run: mypy
+      - run: pytest tests/unit -q
+
+  # Required check in the branch ruleset is literally named "test".
+  # Renaming this job blocks every merge. Do not rename.
+  test:
+    needs: [unit]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "all green"

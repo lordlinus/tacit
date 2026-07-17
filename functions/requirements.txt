@@ -1,0 +1,5 @@
+# foundry_memory itself is vendored in by scripts/sync_functions.sh
+azure-functions>=1.20
+azure-identity>=1.17
+pydantic>=2.7
+pydantic-settings>=2.2
