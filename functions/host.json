@@ -1,8 +1,15 @@
 {
   "version": "2.0",
   "extensionBundle": {
-    "id": "Microsoft.Azure.Functions.ExtensionBundle.Experimental",
-    "version": "[4.*, 5.0.0)"
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.0.0, 5.0.0)"
+  },
+  "extensions": {
+    "mcp": {
+      "serverName": "team-lore",
+      "serverVersion": "0.1.0",
+      "instructions": "Shared team memory for this project. Search it BEFORE exploring the repo; store durable learnings (gotchas, conventions, decisions) so the next engineer's agent doesn't relearn them."
+    }
   },
   "logging": {
     "applicationInsights": {

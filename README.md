@@ -70,16 +70,36 @@ uv run lore dream --backend local --project messy \
     --output-project curated --transcripts samples/transcripts
 ```
 
-## Wire an agent (local stdio MCP)
+## Share it with your team
+
+One person (the admin) stands up the shared store; everyone else runs a single
+command. `lore install` prints the exact wiring for every client:
 
 ```bash
-claude mcp add team-lore -- uv --directory /path/to/team-lore run lore-mcp
+uv run lore install --project contoso-payments \
+    --search-endpoint https://<svc>.search.windows.net \
+    --function-app <app-name>        # optional: the no-clone remote variant
 ```
 
-Same command shape for any MCP client (VS Code `mcp.json`, Copilot CLI). Set
-`TEAMLORE_BACKEND=search` + `TEAMLORE_SEARCH_ENDPOINT` to point the
-stdio server at the shared cloud store — tokens are minted at runtime via
-`DefaultAzureCredential`, so the config stays secret-free.
+That emits, ready to paste:
+- the **Claude Code** one-liner (`claude mcp add team-lore --env ... -- uv ... run lore-mcp`)
+- **VS Code / GitHub Copilot** `.vscode/mcp.json` (commit it to the project repo
+  — the whole team gets wired on next open)
+- **Copilot CLI** `~/.copilot/mcp-config.json`
+- the deployed **Functions endpoint** config (Streamable HTTP; VS Code prompts
+  for the system key so it never lands in a file)
+- an **AGENTS.md / CLAUDE.md snippet** that tells agents to `memory_search`
+  before exploring and to store learnings — wiring without instructions gets
+  ignored, so commit this too.
+
+Teammates using the stdio variant need only `git clone` + `uv` + `az login`;
+tokens are minted at runtime via `DefaultAzureCredential`, so no config ever
+contains a secret. Check adoption with `lore stats` (memories by category,
+contributor, recency — is the team actually writing?).
+
+The MCP layer is verified end to end: `tests/test_mcp_integration.py` drives
+the real server over the real wire protocol with the official MCP client —
+the same path every teammate's agent takes.
 
 ### MCP tools
 
@@ -98,13 +118,18 @@ uv run lore seed samples/memories --backend search \
     --search-endpoint https://<svc>.search.windows.net --project contoso-payments
 ```
 
-Team members point their MCP client at the deployed endpoint:
-`https://<app>.azurewebsites.net/runtime/webhooks/mcp/sse` (header
-`x-functions-key` = the `mcp_extension` system key; fetch with
-`az functionapp keys list`).
+Team members who don't want a local clone point their MCP client straight at
+the deployed endpoint (Streamable HTTP):
+`https://<app>.azurewebsites.net/runtime/webhooks/mcp`, header
+`x-functions-key` = the `mcp_extension` system key
+(`az functionapp keys list -g <rg> -n <app> --query systemKeys.mcp_extension -o tsv`).
+`lore install --function-app <app>` prints this config too.
 
-> **Notes:** the Functions MCP trigger is preview (Experimental extension
-> bundle). The bicep defaults to AI Search's **Serverless tier** (preview,
+> **Notes:** the Functions app uses the official
+> [MCP bindings](https://learn.microsoft.com/azure/azure-functions/functions-bindings-mcp)
+> — `mcp_tool_trigger` from `azure-functions>=1.24` with the mainstream v4
+> extension bundle (Core Tools >= 4.0.7030 to run locally). The bicep defaults
+> to AI Search's **Serverless tier** (preview,
 > 2026): consumption-billed per Compute Unit + GB stored, no capacity to
 > provision — a good fit for bursty team-memory traffic, but currently limited
 > to westcentralus / switzerlandnorth / japaneast with no SLA. Pass

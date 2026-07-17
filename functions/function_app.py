@@ -1,17 +1,18 @@
 """Azure Functions MCP runtime for the team memory.
 
 One function per memory tool, registered from the shared TOOL_DEFINITIONS via
-the native ``mcpToolTrigger`` binding (Functions MCP extension, preview), so
-this file is pure transport: parse the trigger context, dispatch through
-``teamlore.tools.call_tool``, serialize the result.
+the Functions MCP extension's ``mcp_tool_trigger`` binding (azure-functions
+>= 1.24, mainstream v4 extension bundle), so this file is pure transport:
+parse the trigger context, dispatch through ``teamlore.tools.call_tool``,
+serialize the result.
 
 The ``teamlore`` package is copied in next to this file by
 ``scripts/sync_functions.sh`` before packaging/deploy (azd runs it as a
 prepackage hook). Auth to AI Search is the function app's managed identity —
 keyless end to end.
 
-MCP endpoint once deployed:
-    https://<app>.azurewebsites.net/runtime/webhooks/mcp/sse
+MCP endpoint once deployed (Streamable HTTP — preferred; /sse is deprecated):
+    https://<app>.azurewebsites.net/runtime/webhooks/mcp
     (header: x-functions-key = the mcp_extension system key)
 """
 
@@ -48,12 +49,11 @@ def _tool_properties(name: str) -> str:
 
 def _register(tool_name: str):
     @app.function_name(name=tool_name)
-    @app.generic_trigger(
+    @app.mcp_tool_trigger(
         arg_name="context",
-        type="mcpToolTrigger",
-        toolName=tool_name,
+        tool_name=tool_name,
         description=TOOL_DEFINITIONS[tool_name][0],
-        toolProperties=_tool_properties(tool_name),
+        tool_properties=_tool_properties(tool_name),
     )
     def handler(context: str) -> str:
         payload = json.loads(context)

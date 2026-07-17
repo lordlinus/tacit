@@ -37,6 +37,11 @@ var roleSearchIndexDataContributor = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
 var roleStorageBlobDataOwner = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+// The MCP extension uses host-storage queues (identity-based connection).
+var roleStorageQueueDataContributor = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+var roleStorageQueueMessageProcessor = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
 
 // Keyless-first: Entra tokens accepted; api keys stay possible for portal tooling.
 var searchAuthOptions = { aadOrApiKey: { aadAuthFailureMode: 'http401WithBearerChallenge' } }
@@ -141,6 +146,26 @@ resource funcStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource funcStorageQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, functionApp.id, 'queue-contributor')
+  scope: storage
+  properties: {
+    roleDefinitionId: roleStorageQueueDataContributor
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource funcStorageQueueMessages 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, functionApp.id, 'queue-messages')
+  scope: storage
+  properties: {
+    roleDefinitionId: roleStorageQueueMessageProcessor
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // The developer seeding/provisioning from their machine (az login identity).
 resource deployerSearchData 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
   name: guid(search.id, deployerPrincipalId, 'search-data')
@@ -162,4 +187,5 @@ resource deployerSearchService 'Microsoft.Authorization/roleAssignments@2022-04-
 
 output SEARCH_ENDPOINT string = 'https://${search.name}.search.windows.net'
 output FUNCTION_APP_NAME string = functionApp.name
-output MCP_SSE_ENDPOINT string = 'https://${functionApp.properties.defaultHostName}/runtime/webhooks/mcp/sse'
+// Streamable HTTP transport (SSE at /runtime/webhooks/mcp/sse is deprecated).
+output MCP_ENDPOINT string = 'https://${functionApp.properties.defaultHostName}/runtime/webhooks/mcp'

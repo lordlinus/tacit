@@ -157,6 +157,58 @@ def bench() -> None:
     run_bench()
 
 
+@app.command()
+def install(
+    project: str = typer.Option("default", help="Project slug teammates should join"),
+    search_endpoint: str = typer.Option("", help="Shared AI Search endpoint (omit for local-only)"),
+    function_app: str = typer.Option("", help="Deployed Functions app name (remote MCP variant)"),
+) -> None:
+    """Print ready-to-paste MCP wiring for every client your team uses
+    (Claude Code, VS Code/GHCP, Copilot CLI) plus an AGENTS.md snippet."""
+    from . import clients
+
+    wiring = clients.Wiring(
+        repo_dir=str(Path(__file__).resolve().parents[2]),
+        search_endpoint=search_endpoint,
+        project=project,
+    )
+    typer.echo("# Claude Code (also works for Copilot CLI's `copilot mcp add`):\n")
+    typer.echo(f"    {clients.claude_code_command(wiring)}\n")
+    typer.echo("# VS Code / GitHub Copilot — save as .vscode/mcp.json in the project repo:\n")
+    typer.echo(clients.vscode_mcp_json(wiring) + "\n")
+    typer.echo("# Copilot CLI — merge into ~/.copilot/mcp-config.json:\n")
+    typer.echo(clients.copilot_cli_json(wiring) + "\n")
+    if function_app:
+        typer.echo("# No-clone remote variant (deployed Functions MCP endpoint, Streamable HTTP):\n")
+        typer.echo(clients.functions_http_json(function_app) + "\n")
+    typer.echo("# Add to the project's AGENTS.md / CLAUDE.md so agents actually use it:\n")
+    typer.echo(clients.agents_md_snippet(project))
+
+
+@app.command()
+def stats(
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Is the team using it? Memories by category, contributor, and recency."""
+    from collections import Counter
+
+    service = build_service(_settings(backend, project, search_endpoint))
+    memories = service.list("/")
+    if not memories:
+        typer.echo("store is empty — nothing has been written yet")
+        raise typer.Exit(0)
+    by_category = Counter(m.category for m in memories)
+    by_author = Counter(m.updated_by for m in memories)
+    newest = max(memories, key=lambda m: m.updated)
+    total_versions = sum(m.version for m in memories)
+    typer.echo(f"{len(memories)} active memories, {total_versions} versions written")
+    typer.echo("by category: " + ", ".join(f"{k}={v}" for k, v in by_category.most_common()))
+    typer.echo("contributors: " + ", ".join(f"{k}={v}" for k, v in by_author.most_common()))
+    typer.echo(f"latest write: {newest.path} by {newest.updated_by} at {newest.updated.isoformat()}")
+
+
 def parse_memory_file(text: str) -> tuple[dict[str, str], str]:
     """Parse optional ``key: value`` frontmatter from a seed .md file."""
     if not text.startswith("---\n"):
