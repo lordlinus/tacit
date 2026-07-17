@@ -5,6 +5,11 @@ the agent spawns ``tacit-mcp`` (stdio — every MCP client speaks it);
 against the `search` backend, DefaultAzureCredential mints tokens at runtime,
 so no secrets ever land in agent config (same pattern as `foundry-iq mcp`).
 
+Project routing: the default store is inferred from the working directory
+(git repo folder name) when TACIT_PROJECT isn't set — MCP clients spawn stdio
+servers inside the workspace, so each repo lands in its own store with zero
+config. Every tool also takes an optional ``project`` override.
+
 Register in Claude Code:
     claude mcp add tacit -- uv --directory /path/to/tacit run tacit-mcp
 """
@@ -15,8 +20,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import build_service, load_settings
-from .service import MemoryService
+from .config import ServiceRegistry, infer_project_from_cwd, load_settings
 from .tools import TOOL_DEFINITIONS, call_tool
 
 mcp = FastMCP(
@@ -24,81 +28,94 @@ mcp = FastMCP(
     instructions=(
         "Shared team memory for this project. Search it BEFORE exploring the "
         "repo; store durable learnings (gotchas, conventions, decisions) so "
-        "the next engineer's agent doesn't relearn them."
+        "the next engineer's agent doesn't relearn them. Tools route by the "
+        "optional `project` argument (repo folder name, kebab-case); the "
+        "server's default is the directory it was launched in."
     ),
 )
 
-_service: MemoryService | None = None
+_registry: ServiceRegistry | None = None
 
 
-def get_service() -> MemoryService:
-    global _service
-    if _service is None:
-        _service = build_service(load_settings())
-    return _service
+def get_registry() -> ServiceRegistry:
+    global _registry
+    if _registry is None:
+        settings = load_settings()
+        if settings.project == "default":  # not pinned via env/flag -> infer
+            settings.project = infer_project_from_cwd()
+        _registry = ServiceRegistry(settings)
+    return _registry
 
 
 def _register(name: str) -> None:
     description = TOOL_DEFINITIONS[name][0]
 
     # Explicit signatures per tool so MCP clients see real parameter schemas.
-    if name in {"memory_search"}:
+    if name == "memory_search":
 
         @mcp.tool(name=name, description=description)
-        def _search(query: str, top: int = 3, category: str = "") -> Any:
-            return call_tool(get_service(), "memory_search", {"query": query, "top": top, "category": category})
+        def _search(query: str, top: int = 3, category: str = "", project: str = "") -> Any:
+            return call_tool(
+                get_registry(),
+                "memory_search",
+                {"query": query, "top": top, "category": category, "project": project},
+            )
 
     elif name == "memory_brief":
 
         @mcp.tool(name=name, description=description)
-        def _brief() -> Any:
-            return call_tool(get_service(), "memory_brief", {})
+        def _brief(project: str = "") -> Any:
+            return call_tool(get_registry(), "memory_brief", {"project": project})
 
     elif name == "memory_read":
 
         @mcp.tool(name=name, description=description)
-        def _read(path: str) -> Any:
-            return call_tool(get_service(), "memory_read", {"path": path})
+        def _read(path: str, project: str = "") -> Any:
+            return call_tool(get_registry(), "memory_read", {"path": path, "project": project})
 
     elif name == "memory_list":
 
         @mcp.tool(name=name, description=description)
-        def _list(prefix: str = "/") -> Any:
-            return call_tool(get_service(), "memory_list", {"prefix": prefix})
+        def _list(prefix: str = "/", project: str = "") -> Any:
+            return call_tool(get_registry(), "memory_list", {"prefix": prefix, "project": project})
 
     elif name == "memory_create":
 
         @mcp.tool(name=name, description=description)
-        def _create(path: str, content: str, category: str = "general", tags: str = "") -> Any:
+        def _create(
+            path: str, content: str, category: str = "general", tags: str = "", project: str = ""
+        ) -> Any:
             return call_tool(
-                get_service(),
+                get_registry(),
                 "memory_create",
-                {"path": path, "content": content, "category": category, "tags": tags},
+                {"path": path, "content": content, "category": category, "tags": tags, "project": project},
             )
 
     elif name == "memory_update":
 
         @mcp.tool(name=name, description=description)
-        def _update(path: str, expected_sha256: str, content: str) -> Any:
+        def _update(path: str, expected_sha256: str, content: str, project: str = "") -> Any:
             return call_tool(
-                get_service(),
+                get_registry(),
                 "memory_update",
-                {"path": path, "expected_sha256": expected_sha256, "content": content},
+                {"path": path, "expected_sha256": expected_sha256, "content": content, "project": project},
             )
 
     elif name == "memory_delete":
 
         @mcp.tool(name=name, description=description)
-        def _delete(path: str, expected_sha256: str) -> Any:
+        def _delete(path: str, expected_sha256: str, project: str = "") -> Any:
             return call_tool(
-                get_service(), "memory_delete", {"path": path, "expected_sha256": expected_sha256}
+                get_registry(),
+                "memory_delete",
+                {"path": path, "expected_sha256": expected_sha256, "project": project},
             )
 
     elif name == "memory_versions":
 
         @mcp.tool(name=name, description=description)
-        def _versions(path: str) -> Any:
-            return call_tool(get_service(), "memory_versions", {"path": path})
+        def _versions(path: str, project: str = "") -> Any:
+            return call_tool(get_registry(), "memory_versions", {"path": path, "project": project})
 
 
 for _name in TOOL_DEFINITIONS:
@@ -110,19 +127,19 @@ def _register_prompt(name: str) -> None:
 
     description = PROMPT_DEFINITIONS[name][0]
 
-    if name == "recall":
+    if name == "tacit_recall":
 
         @mcp.prompt(name=name, description=description)
         def _recall(question: str) -> str:
-            return render("recall", {"question": question})
+            return render("tacit_recall", {"question": question})
 
-    elif name == "remember":
+    elif name == "tacit_remember":
 
         @mcp.prompt(name=name, description=description)
         def _remember(learning: str = "") -> str:
-            return render("remember", {"learning": learning})
+            return render("tacit_remember", {"learning": learning})
 
-    else:  # onboard / harvest take no arguments
+    else:  # tacit_onboard / tacit_harvest take no arguments
 
         @mcp.prompt(name=name, description=description)
         def _plain() -> str:

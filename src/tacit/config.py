@@ -70,3 +70,48 @@ def build_service(settings: Settings):
 
         store = LocalStore(Path(settings.local_root) / settings.project)
     return MemoryService(store, actor=settings.actor)
+
+
+def slugify_project(name: str) -> str:
+    """Folder/repo name -> valid project slug ('Contoso Payments' -> 'contoso-payments')."""
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "default"
+
+
+def infer_project_from_cwd() -> str:
+    """Project slug from the git repo root's (or cwd's) folder name — how the
+    stdio server picks the right store when clients spawn it in a workspace."""
+    import subprocess
+    from pathlib import Path
+
+    try:
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip()
+        name = Path(root).name
+    except Exception:  # noqa: BLE001 - not a git repo / git missing
+        name = Path.cwd().name
+    return slugify_project(name)
+
+
+class ServiceRegistry:
+    """One MemoryService per project slug over shared settings — how a single
+    MCP server (one endpoint) serves many projects."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._services: dict = {}
+
+    @property
+    def default_project(self) -> str:
+        return self._settings.project
+
+    def get_service(self, project: str = ""):
+        slug = slugify_project(project) if project.strip() else self._settings.project
+        if slug not in self._services:
+            scoped = self._settings.model_copy(update={"project": slug})
+            self._services[slug] = build_service(scoped)
+        return self._services[slug]

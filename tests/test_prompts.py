@@ -20,12 +20,12 @@ def test_every_prompt_renders_tool_driving_instructions():
 
 
 def test_recall_embeds_the_question():
-    assert "why is staging broken" in render("recall", {"question": "why is staging broken"})
+    assert "why is staging broken" in render("tacit_recall", {"question": "why is staging broken"})
 
 
 def test_remember_handles_missing_learning():
-    assert "Review this conversation" in render("remember", {})
-    assert "429" in render("remember", {"learning": "simulator 429 fix"})
+    assert "Review this conversation" in render("tacit_remember", {})
+    assert "429" in render("tacit_remember", {"learning": "simulator 429 fix"})
 
 
 def test_unknown_prompt_raises():
@@ -45,7 +45,7 @@ def test_prompts_over_the_wire(tmp_path):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = {p.name for p in (await session.list_prompts()).prompts}
-                got = await session.get_prompt("recall", {"question": "deploy gotchas?"})
+                got = await session.get_prompt("tacit_recall", {"question": "deploy gotchas?"})
                 return listed, got.messages[0].content.text
 
     listed, recall_text = asyncio.run(scenario())
@@ -75,5 +75,5 @@ def test_function_app_registers_prompt_triggers(tmp_path, monkeypatch):
         if raw["type"] == "mcpPromptTrigger":
             prompts[raw["promptName"]] = fn
     assert set(prompts) == set(PROMPT_DEFINITIONS)
-    rendered = prompts["harvest"].get_user_function()(json.dumps({"arguments": {}}))
+    rendered = prompts["tacit_harvest"].get_user_function()(json.dumps({"arguments": {}}))
     assert "memory_create" in rendered

@@ -22,20 +22,21 @@ import json
 
 import azure.functions as func
 
-from tacit.config import build_service, load_settings
-from tacit.service import MemoryService
+from tacit.config import ServiceRegistry, load_settings
 from tacit.tools import TOOL_DEFINITIONS, call_tool
 
 app = func.FunctionApp()
 
-_service: MemoryService | None = None
+# One shared endpoint serves every team project: tools route by their optional
+# `project` argument; the default comes from the TACIT_PROJECT app setting.
+_registry: ServiceRegistry | None = None
 
 
-def get_service() -> MemoryService:
-    global _service
-    if _service is None:
-        _service = build_service(load_settings())
-    return _service
+def get_registry() -> ServiceRegistry:
+    global _registry
+    if _registry is None:
+        _registry = ServiceRegistry(load_settings())
+    return _registry
 
 
 def _tool_properties(name: str) -> str:
@@ -58,7 +59,7 @@ def _register(tool_name: str):
     def handler(context: str) -> str:
         payload = json.loads(context)
         arguments = payload.get("arguments") or {}
-        result = call_tool(get_service(), tool_name, arguments)
+        result = call_tool(get_registry(), tool_name, arguments)
         return json.dumps(result, ensure_ascii=False, default=str)
 
     return handler

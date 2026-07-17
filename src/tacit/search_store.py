@@ -22,9 +22,11 @@ from .search_index import index_names
 
 class SearchStore:
     def __init__(self, settings: Settings, credential: Any | None = None) -> None:
+        self._settings = settings
         self._endpoint = settings.search_endpoint.rstrip("/")
         self._credential = credential or build_credential(settings.auth_mode, settings.tenant_id)
         self._memories_index, self._versions_index = index_names(settings.project)
+        self._provisioned = False
 
     # -- REST plumbing ---------------------------------------------------------
 
@@ -32,12 +34,26 @@ class SearchStore:
         return f"{self._endpoint}/indexes('{index}'){suffix}?api-version={SEARCH_API_VERSION}"
 
     def _post(self, index: str, suffix: str, body: dict) -> dict | None:
-        return request_json(
+        """POST to an index, creating the project's index pair on first
+        'index not found' (a brand-new project) and retrying once. Requires
+        Search Service Contributor — the Functions MI and seeded developers
+        have it, so new projects need no manual `tacit provision`."""
+        operation = lambda: request_json(  # noqa: E731
             method="POST",
             url=self._url(index, suffix),
             headers=search_headers(self._credential),
             body=body,
         )
+        try:
+            return operation()
+        except RuntimeError as exc:
+            if self._provisioned or "HTTP 404" not in str(exc):
+                raise
+            from .search_index import provision
+
+            provision(self._settings, self._credential)
+            self._provisioned = True
+            return operation()
 
     # -- MemoryStore protocol ---------------------------------------------------
 

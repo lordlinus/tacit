@@ -70,6 +70,18 @@ TOOL_DEFINITIONS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
     ),
 }
 
+# One shared MCP server serves every team project: each tool takes an optional
+# ``project`` routing argument, appended to every definition below.
+_PROJECT_PROPERTY = (
+    "project",
+    "string",
+    "Project slug to route to — use the repository folder name in kebab-case "
+    "(e.g. ~/work/Contoso Payments -> contoso-payments). Omit for the server's "
+    "default project.",
+)
+for _definition in TOOL_DEFINITIONS.values():
+    _definition[1].append(_PROJECT_PROPERTY)
+
 
 def _memory_result(memory: Memory) -> dict[str, Any]:
     return {
@@ -93,9 +105,18 @@ def _split_tags(raw: Any) -> list[str]:
     return [t.strip() for t in str(raw or "").split(",") if t.strip()]
 
 
-def call_tool(service: MemoryService, name: str, arguments: dict[str, Any]) -> Any:
-    """Dispatch one tool call; errors come back as structured results."""
-    args = arguments or {}
+def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) -> Any:
+    """Dispatch one tool call; errors come back as structured results.
+
+    Accepts a MemoryService (single-project: tests, local dev) or a
+    ServiceRegistry (the shared runtimes — each call routes to its optional
+    ``project`` argument's store)."""
+    args = dict(arguments or {})
+    project = str(args.pop("project", "") or "")
+    if hasattr(service_or_registry, "get_service"):
+        service: MemoryService = service_or_registry.get_service(project)
+    else:
+        service = service_or_registry
     try:
         if name == "memory_search":
             hits = service.search(
