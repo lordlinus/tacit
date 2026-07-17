@@ -3,14 +3,14 @@ tombstones, search relevance, brief()."""
 
 import pytest
 
-from foundry_memory.errors import (
+from teamlore.errors import (
     DuplicatePathError,
     MemoryNotFoundError,
     ShaConflictError,
     StoreFullError,
 )
-from foundry_memory.local_store import LocalStore
-from foundry_memory.service import MemoryService
+from teamlore.local_store import LocalStore
+from teamlore.service import MemoryService
 
 
 @pytest.fixture

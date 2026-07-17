@@ -1,5 +1,5 @@
 [project]
-name = "foundry-memory"
+name = "team-lore"
 version = "0.1.0"
 description = "Mini enterprise team memory for AI agents - Azure AI Search store, Azure Functions MCP runtime, dream consolidation"
 readme = "README.md"
@@ -16,15 +16,15 @@ dependencies = [
 dev = ["pytest>=8.0", "azure-functions>=1.20"]
 
 [project.scripts]
-foundry-memory = "foundry_memory.cli:app"
-foundry-memory-mcp = "foundry_memory.mcp_stdio:main"
+lore = "teamlore.cli:app"
+lore-mcp = "teamlore.mcp_stdio:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/foundry_memory"]
+packages = ["src/teamlore"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

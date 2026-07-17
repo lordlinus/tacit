@@ -17,8 +17,8 @@ def function_app(tmp_path_factory):
     # The app builds its service from env at first call; point it at a local store.
     import os
 
-    os.environ["FOUNDRY_MEMORY_BACKEND"] = "local"
-    os.environ["FOUNDRY_MEMORY_LOCAL_ROOT"] = str(root)
+    os.environ["TEAMLORE_BACKEND"] = "local"
+    os.environ["TEAMLORE_LOCAL_ROOT"] = str(root)
     sys.path.insert(0, FUNCTIONS_DIR)
     try:
         import function_app  # noqa: PLC0415
@@ -26,8 +26,8 @@ def function_app(tmp_path_factory):
         yield function_app
     finally:
         sys.path.remove(FUNCTIONS_DIR)
-        os.environ.pop("FOUNDRY_MEMORY_BACKEND")
-        os.environ.pop("FOUNDRY_MEMORY_LOCAL_ROOT")
+        os.environ.pop("TEAMLORE_BACKEND")
+        os.environ.pop("TEAMLORE_LOCAL_ROOT")
 
 
 # get_functions() is not idempotent (its name validation accumulates state),
@@ -38,7 +38,7 @@ def functions_by_name(function_app):
 
 
 def test_every_tool_registers_a_function(functions_by_name):
-    from foundry_memory.tools import TOOL_DEFINITIONS
+    from teamlore.tools import TOOL_DEFINITIONS
 
     assert set(functions_by_name) == set(TOOL_DEFINITIONS)
 

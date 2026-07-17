@@ -1,4 +1,4 @@
-"""foundry-memory CLI: provision, seed, query, dream, and benchmark."""
+"""team-lore CLI: provision, seed, query, dream, and benchmark."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _settings(backend: str = "", project: str = "", search_endpoint: str = "") -
     return load_settings(backend=backend, project=project, search_endpoint=search_endpoint)
 
 
-_BACKEND_OPT = typer.Option("", help="local | search (default from FOUNDRY_MEMORY_BACKEND)")
+_BACKEND_OPT = typer.Option("", help="local | search (default from TEAMLORE_BACKEND)")
 _PROJECT_OPT = typer.Option("", help="Project slug (one store per project)")
 _ENDPOINT_OPT = typer.Option("", help="Azure AI Search endpoint (search backend)")
 
@@ -150,7 +150,7 @@ def bench() -> None:
     # package — resolve it relative to this source tree.
     repo_root = Path(__file__).resolve().parents[2]
     if not (repo_root / "benchmark").is_dir():
-        raise typer.Exit("bench requires the foundry-memory repo checkout (benchmark/ + samples/)")
+        raise typer.Exit("bench requires the team-lore repo checkout (benchmark/ + samples/)")
     sys.path.insert(0, str(repo_root))
     from benchmark.bench import main as run_bench
 

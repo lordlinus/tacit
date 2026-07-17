@@ -1,4 +1,4 @@
-# foundry-memory
+# team-lore
 
 **A mini enterprise team memory for AI coding agents** — Anthropic's managed-agents
 [memory stores](https://docs.claude.com/en/docs/managed-agents/memory) +
@@ -10,7 +10,7 @@ shares one project memory.
   path-addressed, versioned, and BM25-searchable
 - **Runtime:** Azure Functions (Flex Consumption) with native MCP tool
   triggers — serverless, scale-to-zero
-- **Curation:** `foundry-memory dream` — consolidates a messy store + session
+- **Curation:** `lore dream` — consolidates a messy store + session
   transcripts into a new curated store (input never modified)
 - **Auth:** keyless end to end (`az login` locally, managed identity in Azure) —
   the foundry-iq pattern; no secrets in agent config, ever
@@ -23,11 +23,11 @@ those learnings die with the session. Engineer #2's agent re-reads the repo,
 re-derives the architecture, and relearns every gotcha the hard way, burning
 tokens (and a sprint) to reach the same place.
 
-foundry-memory makes the learnings a **shared, searchable team asset**: agents
+team-lore makes the learnings a **shared, searchable team asset**: agents
 write durable facts as they work; the next agent answers from 2–3 memory hits
 (hundreds of tokens) instead of repo excavation (thousands).
 
-**Measured on the included sample** (`uv run foundry-memory bench`): answering six
+**Measured on the included sample** (`uv run lore bench`): answering six
 onboarding questions costs **10,085 tokens cold vs 3,512 warm — a 65% saving**,
 with every warm answer verified to contain the right fact. The one-time cost of
 writing the memories (1,539 tokens) pays back before the second engineer finishes
@@ -35,14 +35,14 @@ day one. See [benchmark/RESULTS.md](benchmark/RESULTS.md).
 
 ## The model, mapped
 
-| Anthropic managed agents       | foundry-memory                                    |
+| Anthropic managed agents       | team-lore                                    |
 | ------------------------------ | ------------------------------------------------- |
 | Memory store                   | AI Search index pair `tm-<project>` / `-versions` |
 | Path-addressed memory          | Search doc keyed by path slug                     |
 | Immutable memory versions      | Append-only versions index (full audit trail)     |
 | `content_sha256` precondition  | Same — structured `sha_conflict` on mismatch      |
 | Mounted dir + file tools       | 8 MCP tools incl. ranked `memory_search`          |
-| Dreams                         | `foundry-memory dream` (heuristic, LLM-pluggable) |
+| Dreams                         | `lore dream` (heuristic, LLM-pluggable) |
 
 ## Five-minute local demo (no Azure needed)
 
@@ -55,29 +55,29 @@ Or step by step:
 
 ```bash
 # Engineer #1's agent stored 7 learnings about the sample project:
-uv run foundry-memory seed samples/memories --backend local --project contoso-payments
+uv run lore seed samples/memories --backend local --project contoso-payments
 
 # Engineer #2's agent, day one — one call instead of reading the repo:
-uv run foundry-memory search "webhook signature fails staging" --backend local --project contoso-payments
-uv run foundry-memory brief --backend local --project contoso-payments
+uv run lore search "webhook signature fails staging" --backend local --project contoso-payments
+uv run lore brief --backend local --project contoso-payments
 
 # Prove the token hypothesis (writes benchmark/RESULTS.md):
-uv run foundry-memory bench
+uv run lore bench
 
 # Dream: curate a messy store (+2 stale duplicates) and mine 2 transcripts:
-uv run foundry-memory seed samples/memories-messy --backend local --project messy
-uv run foundry-memory dream --backend local --project messy \
+uv run lore seed samples/memories-messy --backend local --project messy
+uv run lore dream --backend local --project messy \
     --output-project curated --transcripts samples/transcripts
 ```
 
 ## Wire an agent (local stdio MCP)
 
 ```bash
-claude mcp add team-memory -- uv --directory /path/to/foundry-memory run foundry-memory-mcp
+claude mcp add team-lore -- uv --directory /path/to/team-lore run lore-mcp
 ```
 
 Same command shape for any MCP client (VS Code `mcp.json`, Copilot CLI). Set
-`FOUNDRY_MEMORY_BACKEND=search` + `FOUNDRY_MEMORY_SEARCH_ENDPOINT` to point the
+`TEAMLORE_BACKEND=search` + `TEAMLORE_SEARCH_ENDPOINT` to point the
 stdio server at the shared cloud store — tokens are minted at runtime via
 `DefaultAzureCredential`, so the config stays secret-free.
 
@@ -92,9 +92,9 @@ stdio server at the shared cloud store — tokens are minted at runtime via
 
 ```bash
 azd up                          # AI Search + Flex Consumption Functions + RBAC
-uv run foundry-memory provision --search-endpoint https://<svc>.search.windows.net \
+uv run lore provision --search-endpoint https://<svc>.search.windows.net \
     --project contoso-payments  # create the index pair (idempotent)
-uv run foundry-memory seed samples/memories --backend search \
+uv run lore seed samples/memories --backend search \
     --search-endpoint https://<svc>.search.windows.net --project contoso-payments
 ```
 
@@ -104,19 +104,41 @@ Team members point their MCP client at the deployed endpoint:
 `az functionapp keys list`).
 
 > **Notes:** the Functions MCP trigger is preview (Experimental extension
-> bundle). Azure AI Search has no consumption SKU — the bicep defaults to
-> `basic` (`free` parameter available for dev); the *runtime* is the serverless
-> half. The Functions app's managed identity gets Search data + service roles,
-> so first use can create its own indexes.
+> bundle). The bicep defaults to AI Search's **Serverless tier** (preview,
+> 2026): consumption-billed per Compute Unit + GB stored, no capacity to
+> provision — a good fit for bursty team-memory traffic, but currently limited
+> to westcentralus / switzerlandnorth / japaneast with no SLA. Pass
+> `searchSku=basic` for production or other regions. The Functions app's
+> managed identity gets Search data + service roles, so first use can create
+> its own indexes.
+
+## Using the real Anthropic memory stores & Dreams
+
+team-lore deliberately mirrors the managed-agents API shapes, so the two
+compose rather than compete:
+
+- **If your agents run as Claude managed agents**, Anthropic memory stores
+  already give them mounted, versioned memory — attach one per project and
+  those agents may not need team-lore at all. team-lore earns its keep when
+  the team is *mixed* (GHCP + Claude Code + anything MCP) or when memory must
+  live in your Azure tenant for data-residency/audit reasons.
+- **Dreams as the curation brain:** the heuristic consolidator is the hermetic
+  default, but `dream.Consolidator` is a protocol. A `DreamsConsolidator`
+  could export the store to an Anthropic memory store (`memories.create` per
+  path — the schemas map 1:1), run a real Dream over it plus session
+  transcripts, and import the output store back into AI Search: Anthropic's
+  semantic-quality merging, with the system of record staying in Azure.
+  (Dreams is research preview; requires access and the `dreaming-2026-04-21`
+  beta header.)
 
 ## How it relates to pemp and foundry-iq
 
 - **pemp** is *personal* memory (local-first, markdown+git canonical).
-  foundry-memory lifts its invariants — immutable versions, optimistic
+  team-lore lifts its invariants — immutable versions, optimistic
   concurrency, tombstones, structured conflicts — to a *team* store where
   search and shared access matter more than local files.
 - **foundry-iq-cli** answers "what do the *documents* say" (Azure AI Search
-  knowledge bases over your docs). foundry-memory answers "what has the *team
+  knowledge bases over your docs). team-lore answers "what has the *team
   already learned*". They compose: wire both MCP servers and an agent checks
   team memory first, falls back to the doc KB, then to the repo.
 

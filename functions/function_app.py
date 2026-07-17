@@ -3,9 +3,9 @@
 One function per memory tool, registered from the shared TOOL_DEFINITIONS via
 the native ``mcpToolTrigger`` binding (Functions MCP extension, preview), so
 this file is pure transport: parse the trigger context, dispatch through
-``foundry_memory.tools.call_tool``, serialize the result.
+``teamlore.tools.call_tool``, serialize the result.
 
-The ``foundry_memory`` package is copied in next to this file by
+The ``teamlore`` package is copied in next to this file by
 ``scripts/sync_functions.sh`` before packaging/deploy (azd runs it as a
 prepackage hook). Auth to AI Search is the function app's managed identity —
 keyless end to end.
@@ -21,9 +21,9 @@ import json
 
 import azure.functions as func
 
-from foundry_memory.config import build_service, load_settings
-from foundry_memory.service import MemoryService
-from foundry_memory.tools import TOOL_DEFINITIONS, call_tool
+from teamlore.config import build_service, load_settings
+from teamlore.service import MemoryService
+from teamlore.tools import TOOL_DEFINITIONS, call_tool
 
 app = func.FunctionApp()
 

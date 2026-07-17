@@ -3,7 +3,7 @@
 Six onboarding questions about `samples/contoso-payments`, answered by
 a **cold** agent (repo exploration) vs a **warm** agent (one
 `memory_search`, top 2 hits). Token counts via the heuristic in
-`foundry_memory/tokens.py`, applied identically to both arms;
+`teamlore/tokens.py`, applied identically to both arms;
 15 tokens/tool-call framing charged to both.
 
 | question | cold (tokens / calls) | warm (tokens / calls) | saving | warm answered? | top hit |

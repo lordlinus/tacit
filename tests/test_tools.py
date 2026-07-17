@@ -2,9 +2,9 @@
 
 import pytest
 
-from foundry_memory.local_store import LocalStore
-from foundry_memory.service import MemoryService
-from foundry_memory.tools import TOOL_DEFINITIONS, call_tool
+from teamlore.local_store import LocalStore
+from teamlore.service import MemoryService
+from teamlore.tools import TOOL_DEFINITIONS, call_tool
 
 
 @pytest.fixture

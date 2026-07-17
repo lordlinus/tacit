@@ -1,4 +1,4 @@
-# foundry-memory — design
+# team-lore — design
 
 A mini **enterprise team memory** for AI coding agents, modeled on Anthropic's
 managed-agents **memory stores** + **dreams**, rebuilt on Azure so *any* agent
@@ -20,14 +20,14 @@ memory), with token counts for both.
 
 ## Mapping Anthropic's model onto Azure
 
-| Anthropic managed agents          | foundry-memory                                          |
+| Anthropic managed agents          | team-lore                                          |
 | --------------------------------- | ------------------------------------------------------- |
 | Memory store (`memstore_...`)     | One Azure AI Search index per project (`tm-<project>`)  |
 | Memory (path-addressed doc)       | Search document keyed by path slug                      |
 | Memory version (`memver_...`)     | Doc in a companion `tm-<project>-versions` index        |
 | `content_sha256` precondition     | Same — optimistic concurrency on update/delete          |
 | Mounted directory + file tools    | **MCP tools** served by Azure Functions (native MCP)    |
-| Dreams (curation pipeline)        | `foundry-memory dream` — store + transcripts → new store |
+| Dreams (curation pipeline)        | `lore dream` — store + transcripts → new store |
 | 2,000-memory cap per store        | Soft cap enforced in the service layer (configurable)   |
 
 Two deliberate upgrades over the "mounted directory" model:
@@ -53,7 +53,7 @@ Two deliberate upgrades over the "mounted directory" model:
 ## Components
 
 ```
-src/foundry_memory/
+src/teamlore/
     models.py        Memory / MemoryVersion (pydantic, path-addressed)
     errors.py        NotFound / Duplicate / ShaConflict (structured)
     store.py         MemoryStore protocol
@@ -63,7 +63,7 @@ src/foundry_memory/
     service.py       validation, concurrency, tombstones, brief() onboarding pack
     dream.py         consolidation: store + transcripts → new store
     tokens.py        token estimation (heuristic ~4 chars/token)
-    config.py        FOUNDRY_MEMORY_* settings (pydantic-settings)
+    config.py        TEAMLORE_* settings (pydantic-settings)
     mcp_stdio.py     local stdio MCP server over either backend
     cli.py           typer: provision / seed / search / read / dream / bench
 functions/           Azure Functions app — MCP tool trigger per memory tool
@@ -87,11 +87,18 @@ benchmark/           the token-efficiency experiment + generated RESULTS.md
 
 ### On "AI Search serverless"
 
-Azure AI Search has no consumption SKU; the closest are `free` (dev-only) and
-`basic`. The bicep defaults to `basic` with `free` as a parameter. The
-*runtime* is genuinely serverless: Functions **Flex Consumption** with the MCP
-extension (preview) — scale-to-zero, pay-per-execution, native
-`mcpToolTrigger` bindings.
+Both halves are consumption-based by default:
+
+- **Store:** AI Search's **Serverless tier** (preview, `sku: serverless` on
+  `Microsoft.Search/searchServices@2026-03-01-preview`) — billed per Compute
+  Unit-hour + GB stored, capacity fully managed, no replicas/partitions to
+  configure. Preview caveats: regions limited to westcentralus /
+  switzerlandnorth / japaneast, no SLA, no tier migration; the bicep takes
+  `searchSku=basic|standard|free` for everything else. (The preview's missing
+  File Knowledge Source doesn't matter here — we use plain indexes.)
+- **Runtime:** Functions **Flex Consumption** with the MCP extension
+  (preview) — scale-to-zero, pay-per-execution, native `mcpToolTrigger`
+  bindings.
 
 ### Dream pipeline
 

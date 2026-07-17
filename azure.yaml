@@ -1,7 +1,7 @@
 # azd project: `azd up` provisions infra/main.bicep and deploys the Functions app.
-name: foundry-memory
+name: team-lore
 metadata:
-  template: foundry-memory@0.1.0
+  template: team-lore@0.1.0
 services:
   api:
     project: ./functions

@@ -1,4 +1,4 @@
-"""Settings: FOUNDRY_MEMORY_* env vars / a local .env. Keyless by design —
+"""Settings: TEAMLORE_* env vars / a local .env. Keyless by design —
 there is deliberately no api-key field anywhere."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="FOUNDRY_MEMORY_",
+        env_prefix="TEAMLORE_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # "local" (JSON files under local_root) or "search" (Azure AI Search).
     backend: str = Field(default="local")
-    local_root: str = Field(default=".foundry-memory")
+    local_root: str = Field(default=".team-lore")
 
     # Who mutations are attributed to (defaults to the OS user at runtime).
     actor: str = Field(default="")
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     def require(self, *names: str) -> None:
         missing = [n for n in names if not getattr(self, n, "")]
         if missing:
-            pretty = ", ".join(f"FOUNDRY_MEMORY_{n.upper()}" for n in missing)
+            pretty = ", ".join(f"TEAMLORE_{n.upper()}" for n in missing)
             raise RuntimeError(f"Missing required configuration: {pretty}.")
 
 

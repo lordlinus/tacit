@@ -1,12 +1,12 @@
 """Local stdio MCP server over the shared tool surface.
 
 Keyless wiring for local dev and for teams not yet on the Functions endpoint:
-the agent spawns ``foundry-memory-mcp`` (stdio — every MCP client speaks it);
+the agent spawns ``lore-mcp`` (stdio — every MCP client speaks it);
 against the `search` backend, DefaultAzureCredential mints tokens at runtime,
 so no secrets ever land in agent config (same pattern as `foundry-iq mcp`).
 
 Register in Claude Code:
-    claude mcp add team-memory -- uv --directory /path/to/foundry-memory run foundry-memory-mcp
+    claude mcp add team-lore -- uv --directory /path/to/team-lore run lore-mcp
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from .service import MemoryService
 from .tools import TOOL_DEFINITIONS, call_tool
 
 mcp = FastMCP(
-    "team-memory",
+    "team-lore",
     instructions=(
         "Shared team memory for this project. Search it BEFORE exploring the "
         "repo; store durable learnings (gotchas, conventions, decisions) so "

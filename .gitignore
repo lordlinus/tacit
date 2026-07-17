@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .env
-.foundry-memory/
-functions/foundry_memory/
+.team-lore/
+functions/teamlore/
 functions/local.settings.json
 .azure/

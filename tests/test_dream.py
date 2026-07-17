@@ -2,9 +2,9 @@
 
 import pytest
 
-from foundry_memory.dream import dream, load_transcripts
-from foundry_memory.local_store import LocalStore
-from foundry_memory.service import MemoryService
+from teamlore.dream import dream, load_transcripts
+from teamlore.local_store import LocalStore
+from teamlore.service import MemoryService
 
 
 @pytest.fixture

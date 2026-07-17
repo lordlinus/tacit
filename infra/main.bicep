@@ -1,4 +1,4 @@
-// foundry-memory infra: AI Search (the memory store) + Flex Consumption
+// team-lore infra: AI Search (the memory store) + Flex Consumption
 // Functions (the serverless MCP runtime), wired keyless via managed identity.
 targetScope = 'resourceGroup'
 
@@ -10,9 +10,13 @@ param environmentName string
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
-@description('AI Search SKU. No consumption SKU exists for AI Search; basic is the cheapest production tier, free works for dev (one per subscription).')
-@allowed(['free', 'basic', 'standard'])
-param searchSku string = 'basic'
+@description('''AI Search SKU. Default is the consumption-based Serverless tier
+(preview): pay per Compute Unit + GB stored, no capacity to provision — but
+preview-only regions (westcentralus, switzerlandnorth, japaneast), no SLA, and
+no migration to/from dedicated tiers. Use basic/standard for production or
+other regions; free for throwaway dev (one per subscription).''')
+@allowed(['serverless', 'free', 'basic', 'standard'])
+param searchSku string = 'serverless'
 
 @description('Project slug baked into the function app settings (one index pair per project).')
 param project string = 'contoso-payments'
@@ -34,17 +38,24 @@ var roleSearchIndexDataContributor = subscriptionResourceId(
 var roleStorageBlobDataOwner = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
 
-resource search 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+// Keyless-first: Entra tokens accepted; api keys stay possible for portal tooling.
+var searchAuthOptions = { aadOrApiKey: { aadAuthFailureMode: 'http401WithBearerChallenge' } }
+
+resource search 'Microsoft.Search/searchServices@2026-03-01-preview' = {
   name: searchName
   location: location
   sku: { name: searchSku }
-  properties: {
-    replicaCount: 1
-    partitionCount: 1
-    // Keyless-first: Entra tokens accepted; api keys stay possible for portal tooling.
-    authOptions: { aadOrApiKey: { aadAuthFailureMode: 'http401WithBearerChallenge' } }
-    semanticSearch: searchSku == 'free' ? 'disabled' : 'free'
-  }
+  // Serverless manages capacity itself - replica/partition counts must be omitted.
+  properties: searchSku == 'serverless'
+    ? {
+        authOptions: searchAuthOptions
+      }
+    : {
+        replicaCount: 1
+        partitionCount: 1
+        authOptions: searchAuthOptions
+        semanticSearch: searchSku == 'free' ? 'disabled' : 'free'
+      }
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -91,9 +102,9 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     siteConfig: {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
-        { name: 'FOUNDRY_MEMORY_BACKEND', value: 'search' }
-        { name: 'FOUNDRY_MEMORY_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
-        { name: 'FOUNDRY_MEMORY_PROJECT', value: project }
+        { name: 'TEAMLORE_BACKEND', value: 'search' }
+        { name: 'TEAMLORE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+        { name: 'TEAMLORE_PROJECT', value: project }
       ]
     }
   }

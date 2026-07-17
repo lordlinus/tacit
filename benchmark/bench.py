@@ -12,7 +12,7 @@ text, so those cancel; what differs is payload volume. The harness verifies
 each warm answer actually contains the expected fact — cheap but wrong would
 prove nothing.
 
-Run: ``uv run foundry-memory bench`` (or ``uv run python -m benchmark.bench``).
+Run: ``uv run lore bench`` (or ``uv run python -m benchmark.bench``).
 Writes benchmark/RESULTS.md.
 """
 
@@ -23,11 +23,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from foundry_memory.cli import parse_memory_file
-from foundry_memory.local_store import LocalStore
-from foundry_memory.service import MemoryService
-from foundry_memory.tokens import estimate_tokens
-from foundry_memory.tools import call_tool
+from teamlore.cli import parse_memory_file
+from teamlore.local_store import LocalStore
+from teamlore.service import MemoryService
+from teamlore.tokens import estimate_tokens
+from teamlore.tools import call_tool
 
 from .scenarios import SCENARIOS, Scenario
 
@@ -127,7 +127,7 @@ def render(results: list[ScenarioResult], seed_cost: int) -> str:
         "Six onboarding questions about `samples/contoso-payments`, answered by",
         "a **cold** agent (repo exploration) vs a **warm** agent (one",
         f"`memory_search`, top {SEARCH_TOP} hits). Token counts via the heuristic in",
-        "`foundry_memory/tokens.py`, applied identically to both arms;",
+        "`teamlore/tokens.py`, applied identically to both arms;",
         f"{TOOL_CALL_OVERHEAD} tokens/tool-call framing charged to both.",
         "",
         "| question | cold (tokens / calls) | warm (tokens / calls) | saving | warm answered? | top hit |",
