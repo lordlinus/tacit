@@ -105,6 +105,36 @@ for _name in TOOL_DEFINITIONS:
     _register(_name)
 
 
+def _register_prompt(name: str) -> None:
+    from .prompts import PROMPT_DEFINITIONS, render
+
+    description = PROMPT_DEFINITIONS[name][0]
+
+    if name == "recall":
+
+        @mcp.prompt(name=name, description=description)
+        def _recall(question: str) -> str:
+            return render("recall", {"question": question})
+
+    elif name == "remember":
+
+        @mcp.prompt(name=name, description=description)
+        def _remember(learning: str = "") -> str:
+            return render("remember", {"learning": learning})
+
+    else:  # onboard / harvest take no arguments
+
+        @mcp.prompt(name=name, description=description)
+        def _plain() -> str:
+            return render(name)
+
+
+from .prompts import PROMPT_DEFINITIONS as _PROMPTS  # noqa: E402
+
+for _name in _PROMPTS:
+    _register_prompt(_name)
+
+
 def main() -> None:
     mcp.run()
 

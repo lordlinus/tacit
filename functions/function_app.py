@@ -66,3 +66,39 @@ def _register(tool_name: str):
 
 for _name in TOOL_DEFINITIONS:
     _register(_name)
+
+
+def _register_prompt(prompt_name: str):
+    from tacit.prompts import PROMPT_DEFINITIONS, render
+
+    description, arg_defs = PROMPT_DEFINITIONS[prompt_name]
+
+    # generic_trigger, not the mcp_prompt_trigger sugar: the platform worker
+    # shadows requirements.txt with its own bundled azure-functions (1.25.0b3
+    # today), which predates the prompt decorator — importing it kills indexing
+    # of the WHOLE app. The raw binding works on every worker version.
+    @app.function_name(name=f"prompt_{prompt_name}")
+    @app.generic_trigger(
+        arg_name="context",
+        type="mcpPromptTrigger",
+        promptName=prompt_name,
+        description=description,
+        promptArguments=json.dumps(
+            [
+                {"name": arg, "description": arg_description, "required": required}
+                for arg, arg_description, required in arg_defs
+            ]
+        ),
+    )
+    def handler(context: str) -> str:
+        payload = json.loads(context)
+        arguments = payload.get("arguments") or {}
+        return render(prompt_name, arguments)
+
+    return handler
+
+
+from tacit.prompts import PROMPT_DEFINITIONS as _PROMPTS  # noqa: E402
+
+for _name in _PROMPTS:
+    _register_prompt(_name)

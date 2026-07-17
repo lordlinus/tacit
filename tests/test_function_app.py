@@ -31,10 +31,16 @@ def function_app(tmp_path_factory):
 
 
 # get_functions() is not idempotent (its name validation accumulates state),
-# so snapshot the registry once for all tests.
+# so snapshot the registry once for all tests. Tools only — the prompt
+# triggers registered alongside them are covered in test_prompts.py.
 @pytest.fixture(scope="module")
 def functions_by_name(function_app):
-    return {f.get_function_name(): f for f in function_app.app.get_functions()}
+    registered = {}
+    for f in function_app.app.get_functions():
+        raw = json.loads(str(f.get_raw_bindings()[0]))
+        if raw["type"] == "mcpToolTrigger":
+            registered[f.get_function_name()] = f
+    return registered
 
 
 def test_every_tool_registers_a_function(functions_by_name):
