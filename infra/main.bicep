@@ -43,22 +43,21 @@ var roleStorageQueueDataContributor = subscriptionResourceId(
 var roleStorageQueueMessageProcessor = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
 
-// Keyless-first: Entra tokens accepted; api keys stay possible for portal tooling.
-var searchAuthOptions = { aadOrApiKey: { aadAuthFailureMode: 'http401WithBearerChallenge' } }
-
 resource search 'Microsoft.Search/searchServices@2026-03-01-preview' = {
   name: searchName
   location: location
   sku: { name: searchSku }
+  // Fully keyless: disableLocalAuth rejects api-keys outright - Entra RBAC is
+  // the only way in (mutually exclusive with authOptions, so none is set).
   // Serverless manages capacity itself - replica/partition counts must be omitted.
   properties: searchSku == 'serverless'
     ? {
-        authOptions: searchAuthOptions
+        disableLocalAuth: true
       }
     : {
+        disableLocalAuth: true
         replicaCount: 1
         partitionCount: 1
-        authOptions: searchAuthOptions
         semanticSearch: searchSku == 'free' ? 'disabled' : 'free'
       }
 }
@@ -70,12 +69,51 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   properties: {
     allowBlobPublicAccess: false
+    allowSharedKeyAccess: false // identity-only, matching the keyless posture
     minimumTlsVersion: 'TLS1_2'
+    // Not public, not fully closed: access is governed by the Network
+    // Security Perimeter below (subscription-inbound rule), which is what
+    // lets azd and the Functions host reach the deployment container in
+    // policy-locked subscriptions that forbid public storage endpoints.
+    publicNetworkAccess: 'SecuredByPerimeter'
   }
 }
 
 resource deploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   name: '${storage.name}/default/function-deployments'
+}
+
+resource perimeter 'Microsoft.Network/networkSecurityPerimeters@2024-07-01' = {
+  name: 'nsp-${environmentName}-${suffix}'
+  location: location
+}
+
+resource perimeterProfile 'Microsoft.Network/networkSecurityPerimeters/profiles@2024-07-01' = {
+  parent: perimeter
+  name: 'profile-storage'
+}
+
+// Allow inbound only from identities in this subscription - no IPs, no keys.
+resource perimeterInbound 'Microsoft.Network/networkSecurityPerimeters/profiles/accessRules@2024-07-01' = {
+  parent: perimeterProfile
+  name: 'allow-subscription-inbound'
+  properties: {
+    direction: 'Inbound'
+    subscriptions: [
+      { id: subscription().id }
+    ]
+  }
+}
+
+resource perimeterStorageAssociation 'Microsoft.Network/networkSecurityPerimeters/resourceAssociations@2024-07-01' = {
+  parent: perimeter
+  name: 'assoc-storage'
+  properties: {
+    privateLinkResource: { id: storage.id }
+    profile: { id: perimeterProfile.id }
+    accessMode: 'Learning'
+  }
+  dependsOn: [perimeterInbound]
 }
 
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
@@ -90,6 +128,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   name: funcName
   location: location
   kind: 'functionapp,linux'
+  tags: { 'azd-service-name': 'api' } // how azd deploy finds its target
   identity: { type: 'SystemAssigned' }
   properties: {
     serverFarmId: plan.id
@@ -181,6 +220,17 @@ resource deployerSearchService 'Microsoft.Authorization/roleAssignments@2022-04-
   scope: search
   properties: {
     roleDefinitionId: roleSearchServiceContributor
+    principalId: deployerPrincipalId
+  }
+}
+
+// azd deploy uploads the package zip with the developer's own identity.
+resource deployerStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
+  name: guid(storage.id, deployerPrincipalId, 'blob-contributor')
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
     principalId: deployerPrincipalId
   }
 }
