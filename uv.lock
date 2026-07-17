@@ -946,7 +946,7 @@ wheels = [
 ]
 
 [[package]]
-name = "team-lore"
+name = "tacit"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

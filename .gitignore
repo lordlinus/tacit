@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .env
-.team-lore/
-functions/teamlore/
+.tacit/
+functions/tacit/
 functions/local.settings.json
 .azure/

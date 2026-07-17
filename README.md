@@ -1,4 +1,4 @@
-# team-lore
+# tacit
 
 **A mini enterprise team memory for AI coding agents** — Anthropic's managed-agents
 [memory stores](https://docs.claude.com/en/docs/managed-agents/memory) +
@@ -10,7 +10,7 @@ shares one project memory.
   path-addressed, versioned, and BM25-searchable
 - **Runtime:** Azure Functions (Flex Consumption) with native MCP tool
   triggers — serverless, scale-to-zero
-- **Curation:** `lore dream` — consolidates a messy store + session
+- **Curation:** `tacit dream` — consolidates a messy store + session
   transcripts into a new curated store (input never modified)
 - **Auth:** keyless end to end (`az login` locally, managed identity in Azure) —
   the foundry-iq pattern; no secrets in agent config, ever
@@ -23,11 +23,11 @@ those learnings die with the session. Engineer #2's agent re-reads the repo,
 re-derives the architecture, and relearns every gotcha the hard way, burning
 tokens (and a sprint) to reach the same place.
 
-team-lore makes the learnings a **shared, searchable team asset**: agents
+tacit makes the learnings a **shared, searchable team asset**: agents
 write durable facts as they work; the next agent answers from 2–3 memory hits
 (hundreds of tokens) instead of repo excavation (thousands).
 
-**Measured on the included sample** (`uv run lore bench`): answering six
+**Measured on the included sample** (`uv run tacit bench`): answering six
 onboarding questions costs **10,085 tokens cold vs 3,512 warm — a 65% saving**,
 with every warm answer verified to contain the right fact. The one-time cost of
 writing the memories (1,539 tokens) pays back before the second engineer finishes
@@ -35,14 +35,14 @@ day one. See [benchmark/RESULTS.md](benchmark/RESULTS.md).
 
 ## The model, mapped
 
-| Anthropic managed agents       | team-lore                                    |
+| Anthropic managed agents       | tacit                                    |
 | ------------------------------ | ------------------------------------------------- |
 | Memory store                   | AI Search index pair `tm-<project>` / `-versions` |
 | Path-addressed memory          | Search doc keyed by path slug                     |
 | Immutable memory versions      | Append-only versions index (full audit trail)     |
 | `content_sha256` precondition  | Same — structured `sha_conflict` on mismatch      |
 | Mounted dir + file tools       | 8 MCP tools incl. ranked `memory_search`          |
-| Dreams                         | `lore dream` (heuristic, LLM-pluggable) |
+| Dreams                         | `tacit dream` (heuristic, LLM-pluggable) |
 
 ## Five-minute local demo (no Azure needed)
 
@@ -55,34 +55,34 @@ Or step by step:
 
 ```bash
 # Engineer #1's agent stored 7 learnings about the sample project:
-uv run lore seed samples/memories --backend local --project contoso-payments
+uv run tacit seed samples/memories --backend local --project contoso-payments
 
 # Engineer #2's agent, day one — one call instead of reading the repo:
-uv run lore search "webhook signature fails staging" --backend local --project contoso-payments
-uv run lore brief --backend local --project contoso-payments
+uv run tacit search "webhook signature fails staging" --backend local --project contoso-payments
+uv run tacit brief --backend local --project contoso-payments
 
 # Prove the token hypothesis (writes benchmark/RESULTS.md):
-uv run lore bench
+uv run tacit bench
 
 # Dream: curate a messy store (+2 stale duplicates) and mine 2 transcripts:
-uv run lore seed samples/memories-messy --backend local --project messy
-uv run lore dream --backend local --project messy \
+uv run tacit seed samples/memories-messy --backend local --project messy
+uv run tacit dream --backend local --project messy \
     --output-project curated --transcripts samples/transcripts
 ```
 
 ## Share it with your team
 
 One person (the admin) stands up the shared store; everyone else runs a single
-command. `lore install` prints the exact wiring for every client:
+command. `tacit install` prints the exact wiring for every client:
 
 ```bash
-uv run lore install --project contoso-payments \
+uv run tacit install --project contoso-payments \
     --search-endpoint https://<svc>.search.windows.net \
     --function-app <app-name>        # optional: the no-clone remote variant
 ```
 
 That emits, ready to paste:
-- the **Claude Code** one-liner (`claude mcp add team-lore --env ... -- uv ... run lore-mcp`)
+- the **Claude Code** one-liner (`claude mcp add tacit --env ... -- uv ... run tacit-mcp`)
 - **VS Code / GitHub Copilot** `.vscode/mcp.json` (commit it to the project repo
   — the whole team gets wired on next open)
 - **Copilot CLI** `~/.copilot/mcp-config.json`
@@ -94,7 +94,7 @@ That emits, ready to paste:
 
 Teammates using the stdio variant need only `git clone` + `uv` + `az login`;
 tokens are minted at runtime via `DefaultAzureCredential`, so no config ever
-contains a secret. Check adoption with `lore stats` (memories by category,
+contains a secret. Check adoption with `tacit stats` (memories by category,
 contributor, recency — is the team actually writing?).
 
 The MCP layer is verified end to end: `tests/test_mcp_integration.py` drives
@@ -112,9 +112,9 @@ the same path every teammate's agent takes.
 
 ```bash
 azd up                          # AI Search + Flex Consumption Functions + RBAC
-uv run lore provision --search-endpoint https://<svc>.search.windows.net \
+uv run tacit provision --search-endpoint https://<svc>.search.windows.net \
     --project contoso-payments  # create the index pair (idempotent)
-uv run lore seed samples/memories --backend search \
+uv run tacit seed samples/memories --backend search \
     --search-endpoint https://<svc>.search.windows.net --project contoso-payments
 ```
 
@@ -123,7 +123,7 @@ the deployed endpoint (Streamable HTTP):
 `https://<app>.azurewebsites.net/runtime/webhooks/mcp`, header
 `x-functions-key` = the `mcp_extension` system key
 (`az functionapp keys list -g <rg> -n <app> --query systemKeys.mcp_extension -o tsv`).
-`lore install --function-app <app>` prints this config too.
+`tacit install --function-app <app>` prints this config too.
 
 > **Notes:** the Functions app uses the official
 > [MCP bindings](https://learn.microsoft.com/azure/azure-functions/functions-bindings-mcp)
@@ -139,12 +139,12 @@ the deployed endpoint (Streamable HTTP):
 
 ## Using the real Anthropic memory stores & Dreams
 
-team-lore deliberately mirrors the managed-agents API shapes, so the two
+tacit deliberately mirrors the managed-agents API shapes, so the two
 compose rather than compete:
 
 - **If your agents run as Claude managed agents**, Anthropic memory stores
   already give them mounted, versioned memory — attach one per project and
-  those agents may not need team-lore at all. team-lore earns its keep when
+  those agents may not need tacit at all. tacit earns its keep when
   the team is *mixed* (GHCP + Claude Code + anything MCP) or when memory must
   live in your Azure tenant for data-residency/audit reasons.
 - **Dreams as the curation brain:** the heuristic consolidator is the hermetic
@@ -159,11 +159,11 @@ compose rather than compete:
 ## How it relates to pemp and foundry-iq
 
 - **pemp** is *personal* memory (local-first, markdown+git canonical).
-  team-lore lifts its invariants — immutable versions, optimistic
+  tacit lifts its invariants — immutable versions, optimistic
   concurrency, tombstones, structured conflicts — to a *team* store where
   search and shared access matter more than local files.
 - **foundry-iq-cli** answers "what do the *documents* say" (Azure AI Search
-  knowledge bases over your docs). team-lore answers "what has the *team
+  knowledge bases over your docs). tacit answers "what has the *team
   already learned*". They compose: wire both MCP servers and an agent checks
   team memory first, falls back to the doc KB, then to the repo.
 

@@ -2,9 +2,9 @@
 
 import pytest
 
-from teamlore.local_store import LocalStore
-from teamlore.service import MemoryService
-from teamlore.tools import TOOL_DEFINITIONS, call_tool
+from tacit.local_store import LocalStore
+from tacit.service import MemoryService
+from tacit.tools import TOOL_DEFINITIONS, call_tool
 
 
 @pytest.fixture

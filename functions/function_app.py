@@ -3,10 +3,10 @@
 One function per memory tool, registered from the shared TOOL_DEFINITIONS via
 the Functions MCP extension's ``mcp_tool_trigger`` binding (azure-functions
 >= 1.24, mainstream v4 extension bundle), so this file is pure transport:
-parse the trigger context, dispatch through ``teamlore.tools.call_tool``,
+parse the trigger context, dispatch through ``tacit.tools.call_tool``,
 serialize the result.
 
-The ``teamlore`` package is copied in next to this file by
+The ``tacit`` package is copied in next to this file by
 ``scripts/sync_functions.sh`` before packaging/deploy (azd runs it as a
 prepackage hook). Auth to AI Search is the function app's managed identity —
 keyless end to end.
@@ -22,9 +22,9 @@ import json
 
 import azure.functions as func
 
-from teamlore.config import build_service, load_settings
-from teamlore.service import MemoryService
-from teamlore.tools import TOOL_DEFINITIONS, call_tool
+from tacit.config import build_service, load_settings
+from tacit.service import MemoryService
+from tacit.tools import TOOL_DEFINITIONS, call_tool
 
 app = func.FunctionApp()
 

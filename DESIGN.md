@@ -1,4 +1,4 @@
-# team-lore — design
+# tacit — design
 
 A mini **enterprise team memory** for AI coding agents, modeled on Anthropic's
 managed-agents **memory stores** + **dreams**, rebuilt on Azure so *any* agent
@@ -20,14 +20,14 @@ memory), with token counts for both.
 
 ## Mapping Anthropic's model onto Azure
 
-| Anthropic managed agents          | team-lore                                          |
+| Anthropic managed agents          | tacit                                          |
 | --------------------------------- | ------------------------------------------------------- |
 | Memory store (`memstore_...`)     | One Azure AI Search index per project (`tm-<project>`)  |
 | Memory (path-addressed doc)       | Search document keyed by path slug                      |
 | Memory version (`memver_...`)     | Doc in a companion `tm-<project>-versions` index        |
 | `content_sha256` precondition     | Same — optimistic concurrency on update/delete          |
 | Mounted directory + file tools    | **MCP tools** served by Azure Functions (native MCP)    |
-| Dreams (curation pipeline)        | `lore dream` — store + transcripts → new store |
+| Dreams (curation pipeline)        | `tacit dream` — store + transcripts → new store |
 | 2,000-memory cap per store        | Soft cap enforced in the service layer (configurable)   |
 
 Two deliberate upgrades over the "mounted directory" model:
@@ -53,7 +53,7 @@ Two deliberate upgrades over the "mounted directory" model:
 ## Components
 
 ```
-src/teamlore/
+src/tacit/
     models.py        Memory / MemoryVersion (pydantic, path-addressed)
     errors.py        NotFound / Duplicate / ShaConflict (structured)
     store.py         MemoryStore protocol
@@ -63,7 +63,7 @@ src/teamlore/
     service.py       validation, concurrency, tombstones, brief() onboarding pack
     dream.py         consolidation: store + transcripts → new store
     tokens.py        token estimation (heuristic ~4 chars/token)
-    config.py        TEAMLORE_* settings (pydantic-settings)
+    config.py        TACIT_* settings (pydantic-settings)
     mcp_stdio.py     local stdio MCP server over either backend
     cli.py           typer: provision / seed / search / read / dream / bench
 functions/           Azure Functions app — MCP tool trigger per memory tool

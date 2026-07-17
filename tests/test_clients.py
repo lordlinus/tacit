@@ -2,7 +2,7 @@
 
 import json
 
-from teamlore.clients import (
+from tacit.clients import (
     Wiring,
     agents_md_snippet,
     claude_code_command,
@@ -12,7 +12,7 @@ from teamlore.clients import (
 )
 
 WIRING = Wiring(
-    repo_dir="/opt/team-lore",
+    repo_dir="/opt/tacit",
     search_endpoint="https://srch-x.search.windows.net",
     project="contoso-payments",
 )
@@ -20,33 +20,33 @@ WIRING = Wiring(
 
 def test_claude_code_one_liner():
     command = claude_code_command(WIRING)
-    assert command.startswith("claude mcp add team-lore ")
-    assert "--env TEAMLORE_BACKEND=search" in command
-    assert "--env TEAMLORE_SEARCH_ENDPOINT=https://srch-x.search.windows.net" in command
-    assert command.endswith("-- uv --directory /opt/team-lore run lore-mcp")
+    assert command.startswith("claude mcp add tacit ")
+    assert "--env TACIT_BACKEND=search" in command
+    assert "--env TACIT_SEARCH_ENDPOINT=https://srch-x.search.windows.net" in command
+    assert command.endswith("-- uv --directory /opt/tacit run tacit-mcp")
 
 
 def test_local_wiring_has_no_endpoint():
-    wiring = Wiring(repo_dir="/opt/team-lore")
-    assert wiring.env == {"TEAMLORE_BACKEND": "local", "TEAMLORE_PROJECT": "default"}
+    wiring = Wiring(repo_dir="/opt/tacit")
+    assert wiring.env == {"TACIT_BACKEND": "local", "TACIT_PROJECT": "default"}
 
 
 def test_vscode_and_copilot_json_shapes():
     vscode = json.loads(vscode_mcp_json(WIRING))
-    server = vscode["servers"]["team-lore"]
+    server = vscode["servers"]["tacit"]
     assert server["type"] == "stdio"
     assert server["command"] == "uv"
-    assert server["env"]["TEAMLORE_PROJECT"] == "contoso-payments"
+    assert server["env"]["TACIT_PROJECT"] == "contoso-payments"
 
     copilot = json.loads(copilot_cli_json(WIRING))
-    assert copilot["mcpServers"]["team-lore"]["args"] == server["args"]
+    assert copilot["mcpServers"]["tacit"]["args"] == server["args"]
 
 
 def test_functions_http_uses_streamable_http_and_prompts_for_key():
-    config = json.loads(functions_http_json("func-lore-abc"))
-    server = config["servers"]["team-lore"]
+    config = json.loads(functions_http_json("func-tacit-abc"))
+    server = config["servers"]["tacit"]
     assert server["type"] == "http"
-    assert server["url"] == "https://func-lore-abc.azurewebsites.net/runtime/webhooks/mcp"
+    assert server["url"] == "https://func-tacit-abc.azurewebsites.net/runtime/webhooks/mcp"
     assert not server["url"].endswith("/sse")
     # The key is a VS Code input reference, never a literal secret.
     assert server["headers"]["x-functions-key"] == "${input:mcp-extension-system-key}"

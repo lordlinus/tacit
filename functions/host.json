@@ -6,7 +6,7 @@
   },
   "extensions": {
     "mcp": {
-      "serverName": "team-lore",
+      "serverName": "tacit",
       "serverVersion": "0.1.0",
       "instructions": "Shared team memory for this project. Search it BEFORE exploring the repo; store durable learnings (gotchas, conventions, decisions) so the next engineer's agent doesn't relearn them."
     }

@@ -4,6 +4,6 @@
 # the zip, so the package is copied in. Run by azd's prepackage hook.)
 set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-rm -rf "$repo_root/functions/teamlore"
-cp -r "$repo_root/src/teamlore" "$repo_root/functions/teamlore"
-echo "synced src/teamlore -> functions/teamlore"
+rm -rf "$repo_root/functions/tacit"
+cp -r "$repo_root/src/tacit" "$repo_root/functions/tacit"
+echo "synced src/tacit -> functions/tacit"

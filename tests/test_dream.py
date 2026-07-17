@@ -2,9 +2,9 @@
 
 import pytest
 
-from teamlore.dream import dream, load_transcripts
-from teamlore.local_store import LocalStore
-from teamlore.service import MemoryService
+from tacit.dream import dream, load_transcripts
+from tacit.local_store import LocalStore
+from tacit.service import MemoryService
 
 
 @pytest.fixture

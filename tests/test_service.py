@@ -3,14 +3,14 @@ tombstones, search relevance, brief()."""
 
 import pytest
 
-from teamlore.errors import (
+from tacit.errors import (
     DuplicatePathError,
     MemoryNotFoundError,
     ShaConflictError,
     StoreFullError,
 )
-from teamlore.local_store import LocalStore
-from teamlore.service import MemoryService
+from tacit.local_store import LocalStore
+from tacit.service import MemoryService
 
 
 @pytest.fixture

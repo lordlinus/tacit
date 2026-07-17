@@ -1,4 +1,4 @@
-# teamlore itself is vendored in by scripts/sync_functions.sh
+# tacit itself is vendored in by scripts/sync_functions.sh
 azure-functions>=1.24
 azure-identity>=1.17
 pydantic>=2.7

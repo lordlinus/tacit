@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-SERVER_NAME = "team-lore"
+SERVER_NAME = "tacit"
 
 
 @dataclass(frozen=True)
@@ -25,16 +25,16 @@ class Wiring:
     @property
     def env(self) -> dict[str, str]:
         if not self.search_endpoint:
-            return {"TEAMLORE_BACKEND": "local", "TEAMLORE_PROJECT": self.project}
+            return {"TACIT_BACKEND": "local", "TACIT_PROJECT": self.project}
         return {
-            "TEAMLORE_BACKEND": "search",
-            "TEAMLORE_SEARCH_ENDPOINT": self.search_endpoint,
-            "TEAMLORE_PROJECT": self.project,
+            "TACIT_BACKEND": "search",
+            "TACIT_SEARCH_ENDPOINT": self.search_endpoint,
+            "TACIT_PROJECT": self.project,
         }
 
     @property
     def command_args(self) -> list[str]:
-        return ["--directory", self.repo_dir, "run", "lore-mcp"]
+        return ["--directory", self.repo_dir, "run", "tacit-mcp"]
 
 
 def claude_code_command(wiring: Wiring) -> str:
@@ -108,7 +108,7 @@ def agents_md_snippet(project: str) -> str:
     """Drop into the target repo's AGENTS.md / CLAUDE.md so agents actually
     use the memory — wiring without instructions gets ignored."""
     return f"""\
-## Team memory (team-lore MCP server)
+## Team memory (tacit MCP server)
 
 This project has a shared team memory ('{project}'). Use it without being asked:
 

@@ -17,12 +17,12 @@ from mcp.client.stdio import stdio_client
 def _server_params(tmp_path) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "teamlore.mcp_stdio"],
+        args=["-m", "tacit.mcp_stdio"],
         env={
-            "TEAMLORE_BACKEND": "local",
-            "TEAMLORE_LOCAL_ROOT": str(tmp_path),
-            "TEAMLORE_PROJECT": "integration",
-            "TEAMLORE_ACTOR": "integration-test",
+            "TACIT_BACKEND": "local",
+            "TACIT_LOCAL_ROOT": str(tmp_path),
+            "TACIT_PROJECT": "integration",
+            "TACIT_ACTOR": "integration-test",
         },
     )
 
@@ -82,9 +82,9 @@ def wire(tmp_path_factory):
 
 
 def test_initialize_and_all_tools_visible(wire):
-    from teamlore.tools import TOOL_DEFINITIONS
+    from tacit.tools import TOOL_DEFINITIONS
 
-    assert wire["server_name"] == "team-lore"
+    assert wire["server_name"] == "tacit"
     assert wire["tools"] == set(TOOL_DEFINITIONS)
 
 

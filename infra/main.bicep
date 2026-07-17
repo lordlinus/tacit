@@ -1,4 +1,4 @@
-// team-lore infra: AI Search (the memory store) + Flex Consumption
+// tacit infra: AI Search (the memory store) + Flex Consumption
 // Functions (the serverless MCP runtime), wired keyless via managed identity.
 targetScope = 'resourceGroup'
 
@@ -107,9 +107,9 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     siteConfig: {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
-        { name: 'TEAMLORE_BACKEND', value: 'search' }
-        { name: 'TEAMLORE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
-        { name: 'TEAMLORE_PROJECT', value: project }
+        { name: 'TACIT_BACKEND', value: 'search' }
+        { name: 'TACIT_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+        { name: 'TACIT_PROJECT', value: project }
       ]
     }
   }
