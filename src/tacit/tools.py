@@ -18,9 +18,13 @@ TOOL_DEFINITIONS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
     "memory_search": (
         "Search the team's shared project memory. ALWAYS try this before exploring "
         "the repo — gotchas, conventions, and architecture learned by previous "
-        "engineers' agents are stored here.",
+        "engineers' agents are stored here. Ask in plain words, as you would a "
+        "teammate; results are semantically ranked, so a whole question works "
+        "better than keywords. Each hit is the matching SECTION of a memory, not "
+        "the whole file. A hit with truncated=true was shortened — call "
+        "memory_read on its path if you need the surrounding detail.",
         [
-            ("query", "string", "What you want to know, in plain words."),
+            ("query", "string", "What you want to know, as a full question in plain words."),
             ("top", "number", "Max results (default 3)."),
             ("category", "string", "Optional filter: onboarding|gotcha|architecture|convention|general."),
         ],
@@ -99,6 +103,21 @@ def _memory_result(memory: Memory) -> dict[str, Any]:
     }
 
 
+def _hit_result(hit: Any) -> dict[str, Any]:
+    """Drop empty and default fields: an unsectioned memory carries no heading,
+    and truncated=false is the norm. Absent keys cost the caller nothing, and a
+    present ``truncated`` then genuinely means "there is more".
+
+    Identity comparison for the flag, because ``0.0 == False`` in Python would
+    otherwise delete a zero score."""
+    dropped: tuple[Any, ...] = ("", [], None)
+    return {
+        k: v
+        for k, v in hit.model_dump().items()
+        if not (v in dropped or v is False)
+    }
+
+
 def _split_tags(raw: Any) -> list[str]:
     if isinstance(raw, list):
         return [str(t).strip() for t in raw if str(t).strip()]
@@ -124,7 +143,7 @@ def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) ->
                 top=int(args.get("top") or 3),
                 category=str(args.get("category") or ""),
             )
-            return [h.model_dump() for h in hits]
+            return [_hit_result(h) for h in hits]
         if name == "memory_brief":
             return {"brief": service.brief()}
         if name == "memory_read":

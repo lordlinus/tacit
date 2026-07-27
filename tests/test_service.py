@@ -90,6 +90,42 @@ def test_search_ranks_title_matches_first(service):
     assert hits[0].content  # full content returned, enough to answer from
 
 
+def test_search_returns_the_matching_section_not_the_whole_memory(service):
+    """The point of sectioning: a targeted question against a long memory costs
+    the matching section, not the entire document."""
+    body = (
+        "# Payments on-call\n\nlead\n\n"
+        "## Database failover\n\nPromote the geo-replica and drain the outbox first.\n\n"
+        "## Refund backlog drain\n\nRaise REFUND_BATCH to 200; never add consumers.\n"
+    )
+    service.create("/runbooks/oncall.md", body, category="runbooks")
+    hits = service.search("drain the refund backlog")
+    assert hits[0].section == "refund-backlog-drain"
+    assert hits[0].heading == "Refund backlog drain"
+    assert "REFUND_BATCH" in hits[0].content
+    assert "geo-replica" not in hits[0].content
+    assert len(hits[0].content) < len(body)
+
+
+def test_one_hit_per_memory_even_when_several_sections_match(service):
+    service.create(
+        "/runbooks/oncall.md",
+        "# Oncall\n\n## Refunds A\n\nrefund backlog\n\n## Refunds B\n\nrefund backlog again\n",
+        category="runbooks",
+    )
+    hits = service.search("refund backlog")
+    assert [h.path for h in hits] == ["/runbooks/oncall.md"]
+
+
+def test_unsectioned_memory_returns_its_whole_body(service):
+    """tacit memories are usually one focused fact; those must not be split."""
+    service.create("/gotchas/vpn.md", "# VPN breaks DNS\n\nUse 1.1.1.1 while connected.", category="gotcha")
+    hit = service.search("vpn dns")[0]
+    assert hit.section == "body"
+    assert hit.heading == ""
+    assert "1.1.1.1" in hit.content
+
+
 def test_search_category_filter(service):
     service.create("/a.md", "# Deploy steps", category="onboarding")
     service.create("/b.md", "# Deploy gotcha", category="gotcha")

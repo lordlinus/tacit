@@ -116,6 +116,10 @@ class MemoryService:
     def list(self, prefix: str = "/") -> list[Memory]:
         return self._store.list(prefix)
 
+    def reindex(self) -> int:
+        """Rebuild any derived retrieval index from the system of record."""
+        return self._store.reindex()
+
     def search(self, query: str, *, top: int = 5, category: str = "") -> list[SearchHit]:
         return self._store.search(query, top=top, category=category)
 

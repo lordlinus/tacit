@@ -27,7 +27,11 @@ class MemoryStore(Protocol):
         ...
 
     def search(self, query: str, *, top: int = 5, category: str = "") -> list[SearchHit]:
-        """Ranked full-text search over active memories."""
+        """Ranked search over active memories; hits carry the matched section."""
+        ...
+
+    def reindex(self) -> int:
+        """Rebuild any derived retrieval index; returns memories processed."""
         ...
 
     def versions(self, path: str) -> list[MemoryVersion]:

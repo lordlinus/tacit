@@ -6,8 +6,9 @@
 Azure so *any* MCP-speaking agent (GitHub Copilot, Claude Code, Cursor) on a team
 shares one project memory.
 
-- **Store:** Azure AI Search — one index pair per project, memories are
-  path-addressed, versioned, and BM25-searchable
+- **Store:** Azure AI Search — per project, memories are path-addressed,
+  versioned, and searched by the semantic ranker over section-level chunks,
+  so a hit costs the relevant part of a memory rather than the whole file
 - **Runtime:** Azure Functions (Flex Consumption) with native MCP tool
   triggers — serverless, scale-to-zero
 - **Curation:** `tacit dream` — consolidates a messy store + session

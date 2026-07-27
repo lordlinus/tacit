@@ -26,15 +26,29 @@ def provision(
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
-    """Create the tm-<project> index pair on Azure AI Search (idempotent)."""
+    """Create the tm-<project> indexes on Azure AI Search (idempotent)."""
     from .azure_common import build_credential
     from .search_index import provision as provision_indexes
 
     settings = _settings(backend="search", project=project, search_endpoint=search_endpoint)
     settings.require("search_endpoint")
     credential = build_credential(settings.auth_mode, settings.tenant_id)
-    memories, versions = provision_indexes(settings, credential)
-    typer.echo(f"provisioned indexes: {memories}, {versions}")
+    typer.echo("provisioned indexes: " + ", ".join(provision_indexes(settings, credential)))
+
+
+@app.command()
+def reindex(
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Rebuild the chunks index from the memories index.
+
+    Run once per project provisioned before section-level search; re-running is
+    harmless because chunk keys are derived from path + section slug."""
+    settings = _settings(backend="search", project=project, search_endpoint=search_endpoint)
+    settings.require("search_endpoint")
+    count = build_service(settings).reindex()
+    typer.echo(f"reindexed {count} memories")
 
 
 @app.command()
@@ -172,7 +186,11 @@ def dream(
 
 
 @app.command()
-def bench() -> None:
+def bench(
+    backend: str = typer.Option("local", help="Warm-arm backend: local (hermetic) or search (live Azure)"),
+    project: str = typer.Option("bench", help="Project slug when --backend search"),
+    out: str = typer.Option("", help="Report path (default benchmark/RESULTS.md)"),
+) -> None:
     """Run the token-efficiency benchmark (cold vs warm onboarding)."""
     import sys
 
@@ -184,7 +202,10 @@ def bench() -> None:
     sys.path.insert(0, str(repo_root))
     from benchmark.bench import main as run_bench
 
-    run_bench()
+    argv = ["--backend", backend, "--project", project]
+    if out:
+        argv += ["--out", out]
+    run_bench(argv)
 
 
 @app.command()

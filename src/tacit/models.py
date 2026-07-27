@@ -108,11 +108,24 @@ class MemoryVersion(BaseModel):
 
 
 class SearchHit(BaseModel):
-    """A search result: enough to answer from, cheap to transmit."""
+    """A ranked section of a memory: enough to answer from, cheap to transmit.
+
+    Retrieval is progressive. ``content`` is the matched *section*, not the
+    whole memory, so a long memory costs only the part that was relevant. If
+    even that section is long, ``content`` narrows again to the extract that
+    matched — a semantic caption when the ranker supplied one — and
+    ``truncated`` is set, meaning "call memory_read for the rest".
+
+    There is deliberately no second field holding both: a snippet alongside the
+    text it summarises is pure duplication, and the caller pays for both.
+    """
 
     path: str
     title: str
     category: str
     tags: list[str] = Field(default_factory=list)
     score: float = 0.0
+    section: str = ""
+    heading: str = ""
     content: str = ""
+    truncated: bool = False

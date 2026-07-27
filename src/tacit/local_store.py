@@ -1,8 +1,9 @@
 """File-backed store: one JSON file for latest state, one JSONL for versions.
 
 This is the hermetic backend — tests, the benchmark, and offline dev all run
-against it. Search is a small TF-IDF ranker so relevance ordering behaves like
-the AI Search backend (BM25) without the cloud.
+against it. Search is a small TF-IDF ranker over the same section chunks the
+AI Search backend indexes, with the same title/tag weighting, so relevance
+ordering behaves like the cloud without the cloud.
 """
 
 from __future__ import annotations
@@ -14,8 +15,12 @@ from collections import Counter
 from pathlib import Path
 
 from .models import Memory, MemoryStatus, MemoryVersion, SearchHit
+from .sections import Section, narrow, snippet, split_sections
 
 _WORD = re.compile(r"[a-z0-9]+")
+
+TITLE_WEIGHT = 3
+TAG_WEIGHT = 2
 
 
 def _terms(text: str) -> list[str]:
@@ -63,48 +68,74 @@ class LocalStore:
             key=lambda m: m.path,
         )
 
+    def reindex(self) -> int:
+        """No-op: the local backend sections at query time, so it has no derived
+        index to rebuild. Present so callers need not special-case the backend."""
+        return len(self.list("/"))
+
     def search(self, query: str, *, top: int = 5, category: str = "") -> list[SearchHit]:
-        active = [
-            m
+        """Rank sections, not whole memories, and return a snippet of each."""
+        chunks: list[tuple[Memory, Section]] = [
+            (m, section)
             for m in self._memories.values()
             if m.status is MemoryStatus.ACTIVE and (not category or m.category == category)
+            for section in split_sections(m.content)
         ]
-        if not active:
+        if not chunks:
             return []
         query_terms = _terms(query)
-        n_docs = len(active)
+        n_docs = len(chunks)
         doc_freq: Counter[str] = Counter()
-        doc_terms: dict[str, Counter[str]] = {}
-        for m in active:
-            # Title and tags get repeated so matches there outrank body matches.
-            weighted = _terms(m.title) * 3 + _terms(" ".join(m.tags)) * 2 + _terms(m.content)
+        chunk_terms: list[Counter[str]] = []
+        for memory, section in chunks:
+            # Title and tags get repeated so matches there outrank body matches
+            # — the same bias the AI Search scoring profile applies.
+            weighted = (
+                _terms(memory.title) * TITLE_WEIGHT
+                + _terms(" ".join(memory.tags)) * TAG_WEIGHT
+                + _terms(section.heading)
+                + _terms(section.text)
+            )
             counts = Counter(weighted)
-            doc_terms[m.path] = counts
+            chunk_terms.append(counts)
             for term in counts:
                 doc_freq[term] += 1
 
-        scored: list[tuple[float, Memory]] = []
-        for m in active:
-            counts = doc_terms[m.path]
+        scored: list[tuple[float, Memory, Section]] = []
+        for (memory, section), counts in zip(chunks, chunk_terms, strict=True):
             score = sum(
                 (1 + math.log(counts[t])) * math.log(1 + n_docs / doc_freq[t])
                 for t in query_terms
                 if counts.get(t)
             )
             if score > 0:
-                scored.append((score, m))
-        scored.sort(key=lambda pair: (-pair[0], pair[1].path))
-        return [
-            SearchHit(
-                path=m.path,
-                title=m.title,
-                category=m.category,
-                tags=m.tags,
-                score=round(score, 4),
-                content=m.content,
+                scored.append((score, memory, section))
+        scored.sort(key=lambda triple: (-triple[0], triple[1].path, triple[2].slug))
+
+        hits: list[SearchHit] = []
+        seen: set[str] = set()
+        for score, memory, section in scored:
+            # One hit per memory: the best-scoring section represents it.
+            if memory.path in seen:
+                continue
+            seen.add(memory.path)
+            text, truncated = narrow(section.text, snippet(section.text, query))
+            hits.append(
+                SearchHit(
+                    path=memory.path,
+                    title=memory.title,
+                    category=memory.category,
+                    tags=memory.tags,
+                    score=round(score, 4),
+                    section=section.slug,
+                    heading=section.heading,
+                    content=text,
+                    truncated=truncated,
+                )
             )
-            for score, m in scored[:top]
-        ]
+            if len(hits) >= top:
+                break
+        return hits
 
     def versions(self, path: str) -> list[MemoryVersion]:
         if not self._versions_path.exists():

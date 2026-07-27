@@ -81,3 +81,24 @@ def test_every_definition_dispatches(service):
     assert set(smoke_args) == set(TOOL_DEFINITIONS)
     for name, args in smoke_args.items():
         call_tool(service, name, args)  # must not raise
+
+
+def test_hit_result_omits_defaults_but_keeps_a_zero_score():
+    """Absent keys cost the caller nothing, so an unsectioned, untruncated hit
+    carries neither field — but a 0.0 score must survive, since ``0.0 == False``
+    in Python is an easy way to lose it."""
+    from tacit.models import SearchHit
+    from tacit.tools import _hit_result
+
+    lean = _hit_result(SearchHit(path="/a.md", title="A", category="g", score=0.0, content="x"))
+    assert "truncated" not in lean and "heading" not in lean and "tags" not in lean
+    assert lean["score"] == 0.0
+
+    rich = _hit_result(
+        SearchHit(
+            path="/a.md", title="A", category="g", score=2.0, content="x",
+            section="refunds", heading="Refunds", truncated=True,
+        )
+    )
+    assert rich["truncated"] is True
+    assert rich["section"] == "refunds"

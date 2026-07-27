@@ -76,7 +76,7 @@ benchmark/           the token-efficiency experiment + generated RESULTS.md
 
 | Tool              | Purpose                                                        |
 | ----------------- | -------------------------------------------------------------- |
-| `memory_search`   | BM25 search; returns top-k snippets — the token-efficiency hero |
+| `memory_search`   | Semantic search over sections — the token-efficiency hero       |
 | `memory_brief`    | One-call onboarding pack (all `onboarding`-category memories)   |
 | `memory_read`     | Full memory by path (returns `content_sha256`)                  |
 | `memory_list`     | Paths + titles, optional prefix filter                          |
@@ -84,6 +84,37 @@ benchmark/           the token-efficiency experiment + generated RESULTS.md
 | `memory_update`   | New version; requires `expected_sha256`                         |
 | `memory_delete`   | Tombstone; requires `expected_sha256`                           |
 | `memory_versions` | Audit trail for a path                                          |
+
+### Retrieval: sections, semantic ranking, progressive disclosure
+
+A memory store is only worth its tokens if a hit costs less than reading the
+repo. Three decisions make that true:
+
+**Sections are the retrieval unit.** Each memory is split on level-2 headings
+into an index of its own, `tm-<project>-chunks`. The split is *adaptive*: a
+memory with no `##` headings — tacit's usual "one focused fact" shape — stays a
+single chunk, so short memories behave exactly as before. Long memories (a
+runbook, an ADR) gain granularity: asking about refunds returns the refunds
+section, not the whole runbook.
+
+The chunks index is **derived**. `tm-<project>` remains the system of record for
+`get`/`list`/`count` and the `content_sha256` preconditions; chunk keys are
+`path--s-<slug>`, so re-projection is idempotent. `tacit reindex` rebuilds it,
+which is how a project provisioned before sections existed catches up.
+
+**Semantic ranking, with a fallback.** Queries use `queryType: semantic` with
+extractive captions, so a plain-language question outranks keyword overlap. A
+scoring profile (title ×3, tags ×2, plus freshness) shapes the BM25 candidate
+set, aligning Azure's ordering with the local backend's. If a service tier
+declines semantic search, the store downgrades to BM25 permanently for that
+process rather than failing the query — and the scoring profile, which the L2
+reranker would otherwise never see, is applied on that path.
+
+**One field, progressively narrowed.** A hit carries the matched section; if
+that section is itself long, it is replaced by the caption/highlight extract and
+flagged `truncated`, meaning "call `memory_read` for the rest". Never both — a
+snippet sitting next to the text it summarises is duplication the caller pays
+for twice. Measured: emitting both dropped the benchmark from 65% to 54%.
 
 ### On "AI Search serverless"
 
