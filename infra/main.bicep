@@ -1,5 +1,10 @@
-// tacit infra: AI Search (the memory store) + Flex Consumption
-// Functions (the serverless MCP runtime), wired keyless via managed identity.
+// tacit infra: AI Search (the organization-wide memory store) + Flex
+// Consumption Functions (the serverless MCP runtime), wired keyless via
+// managed identity.
+//
+// One search service holds every team's memory in one shared index set, so
+// this deploys once per organization rather than once per team; the index
+// count no longer grows with the number of projects onboarded.
 targetScope = 'resourceGroup'
 
 @minLength(1)
@@ -18,11 +23,27 @@ other regions; free for throwaway dev (one per subscription).''')
 @allowed(['serverless', 'free', 'basic', 'standard'])
 param searchSku string = 'serverless'
 
-@description('Project slug baked into the function app settings (one index pair per project).')
-param project string = 'contoso-payments'
+@description('''Default project slug for callers that do not pass one. Agents
+normally pass `project` on every call, so this is only the fallback; it is not
+a per-team setting and does not need changing to onboard a new repo.''')
+param project string = 'default'
+
+@description('''Team that memories written through this runtime are attributed
+to. Used for `visibility: team` memories. Note this is a *shared* default: the
+Functions endpoint authenticates with one system key, so it cannot tell callers
+apart. Per-engineer attribution requires the stdio variant, where each person
+sets TACIT_TEAM themselves.''')
+param team string = ''
 
 @description('Object id of the developer running azd, granted search data access for seeding/provisioning.')
 param deployerPrincipalId string = ''
+
+@description('''Region for Application Insights and its Log Analytics
+workspace. Deliberately separate from `location`: the AI Search Serverless
+preview pins the rest of the stack to westcentralus / switzerlandnorth /
+japaneast, and Application Insights is not offered in westcentralus. Telemetry
+is region-independent, so this costs nothing but a parameter.''')
+param monitoringLocation string = 'westus2'
 
 var suffix = toLower(uniqueString(resourceGroup().id, environmentName))
 var searchName = 'srch-${environmentName}-${suffix}'
@@ -116,6 +137,28 @@ resource perimeterStorageAssociation 'Microsoft.Network/networkSecurityPerimeter
   dependsOn: [perimeterInbound]
 }
 
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: 'log-${environmentName}-${suffix}'
+  location: monitoringLocation
+  properties: {
+    sku: { name: 'PerGB2018' }
+    retentionInDays: 30
+  }
+}
+
+// Without this, a failing MCP invocation surfaces to the client as an opaque
+// JSON-RPC -32603 and there is nowhere to look. Telemetry is not optional for
+// a server whose only interface is a protocol.
+resource insights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-${environmentName}-${suffix}'
+  location: monitoringLocation
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
+  }
+}
+
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: planName
   location: location
@@ -140,15 +183,23 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           authentication: { type: 'SystemAssignedIdentity' }
         }
       }
+      // 3.12 is what the remote Oryx build actually resolves, so pinning
+      // higher here only desynchronises the two. Consequence: azure-functions
+      // stays on 1.x (2.x needs >=3.13), so `mcp_prompt_trigger` is
+      // unavailable and MCP prompts work over stdio but not over HTTP. The
+      // setup workflow is therefore delivered as a *tool*, which every client
+      // and every transport supports. See DESIGN.md.
       runtime: { name: 'python', version: '3.12' }
       scaleAndConcurrency: { maximumInstanceCount: 40, instanceMemoryMB: 2048 }
     }
     siteConfig: {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
         { name: 'TACIT_BACKEND', value: 'search' }
         { name: 'TACIT_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
         { name: 'TACIT_PROJECT', value: project }
+        { name: 'TACIT_TEAM', value: team }
       ]
     }
   }

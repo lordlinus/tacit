@@ -13,20 +13,54 @@ from .errors import DuplicatePathError, MemoryNotFoundError, ShaConflictError, S
 from .models import Memory
 from .service import MemoryService
 
+#: Ceiling on `top`. A memory answer is meant to cost a few hundred tokens; an
+#: agent asking for hundreds of hits has misunderstood the tool, and the result
+#: would be more expensive than the repo exploration it replaces.
+MAX_SEARCH_TOP = 25
+
 # name -> (description, [(property, type, description), ...])
 TOOL_DEFINITIONS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
+    "tacit_setup": (
+        "START HERE in a repo that has never used team memory. Returns the "
+        "standing instructions to write into this repo's AGENTS.md (and "
+        "CLAUDE.md / .github/copilot-instructions.md if they exist) so that "
+        "you read and update memory from now on without being asked. Call it, "
+        "then actually write the files and tell the user what you did. Safe to "
+        "call again — it replaces its own section rather than duplicating it.",
+        [],
+    ),
     "memory_search": (
-        "Search the team's shared project memory. ALWAYS try this before exploring "
-        "the repo — gotchas, conventions, and architecture learned by previous "
-        "engineers' agents are stored here. Ask in plain words, as you would a "
-        "teammate; results are semantically ranked, so a whole question works "
-        "better than keywords. Each hit is the matching SECTION of a memory, not "
-        "the whole file. A hit with truncated=true was shortened — call "
-        "memory_read on its path if you need the surrounding detail.",
+        "Search the organization's shared memory. ALWAYS try this before "
+        "exploring the repo — gotchas, conventions, and architecture learned by "
+        "previous engineers' agents are stored here. By default this searches "
+        "THIS project plus everything other teams have published org-wide, so a "
+        "problem another team already solved will surface here. Ask in plain "
+        "words, as you would a teammate; results are semantically ranked, so a "
+        "whole question works better than keywords. Each hit is the matching "
+        "SECTION of a memory, not the whole file. A hit carrying a 'project' "
+        "field came from ANOTHER team — treat it as a strong lead about how "
+        "they solved it, not as gospel about this repo. A hit with "
+        "truncated=true was shortened — call memory_read on its path if you "
+        "need the surrounding detail.",
         [
             ("query", "string", "What you want to know, as a full question in plain words."),
             ("top", "number", "Max results (default 3)."),
             ("category", "string", "Optional filter: onboarding|gotcha|architecture|convention|general."),
+            (
+                "scope",
+                "string",
+                "How wide to search: 'project+org' (default — this project plus "
+                "org-wide memories from other teams), 'project' (this repo only), "
+                "or 'org' (other teams only — use when this repo's own memory came "
+                "up empty and you want to know how the rest of the org handles it).",
+            ),
+            (
+                "entity",
+                "string",
+                "Optional canonical entity id from the organization's shared "
+                "vocabulary (e.g. 'payments-gateway'). Restricts results to "
+                "memories about that thing, whatever each team calls it.",
+            ),
         ],
     ),
     "memory_brief": (
@@ -44,12 +78,22 @@ TOOL_DEFINITIONS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
     ),
     "memory_create": (
         "Store a NEW learning for the team (fails if the path exists). Write one "
-        "focused fact per memory, with a '# Title' heading.",
+        "focused fact per memory, with a '# Title' heading. Memories are shared "
+        "with the whole organization by default, so write titles that make sense "
+        "to someone outside this repo.",
         [
             ("path", "string", "Where to file it, e.g. /gotchas/retry-on-429.md"),
             ("content", "string", "Markdown body starting with '# Title'."),
             ("category", "string", "onboarding|gotcha|architecture|convention|general."),
             ("tags", "string", "Comma-separated tags."),
+            (
+                "visibility",
+                "string",
+                "Who may read it outside this project: 'org' (default — anyone in "
+                "the organization), 'team' (this team's projects only), or "
+                "'private' (this project only). Narrow it for unannounced work or "
+                "team-internal process notes; otherwise leave it shared.",
+            ),
         ],
     ),
     "memory_update": (
@@ -59,6 +103,12 @@ TOOL_DEFINITIONS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
             ("path", "string", "Memory path."),
             ("expected_sha256", "string", "content_sha256 from your latest read."),
             ("content", "string", "Replacement markdown body."),
+            (
+                "visibility",
+                "string",
+                "Optional new visibility: org|team|private. Omit to keep the "
+                "current one.",
+            ),
         ],
     ),
     "memory_delete": (
@@ -92,6 +142,9 @@ def _memory_result(memory: Memory) -> dict[str, Any]:
         "path": memory.path,
         "title": memory.title,
         "category": memory.category,
+        "project": memory.project,
+        "team": memory.team,
+        "visibility": str(memory.visibility),
         "tags": list(memory.tags),
         "version": memory.version,
         "status": str(memory.status),
@@ -103,19 +156,28 @@ def _memory_result(memory: Memory) -> dict[str, Any]:
     }
 
 
-def _hit_result(hit: Any) -> dict[str, Any]:
+def _hit_result(hit: Any, home_project: str = "") -> dict[str, Any]:
     """Drop empty and default fields: an unsectioned memory carries no heading,
     and truncated=false is the norm. Absent keys cost the caller nothing, and a
     present ``truncated`` then genuinely means "there is more".
 
+    ``project``/``team`` are elided when the hit came from the caller's own
+    project — the common case, where naming it is pure noise. Their *presence*
+    is therefore the signal that a result crossed a team boundary, which is
+    exactly when the agent should weigh it differently.
+
     Identity comparison for the flag, because ``0.0 == False`` in Python would
     otherwise delete a zero score."""
     dropped: tuple[Any, ...] = ("", [], None)
-    return {
+    result = {
         k: v
         for k, v in hit.model_dump().items()
         if not (v in dropped or v is False)
     }
+    if home_project and result.get("project") == home_project:
+        result.pop("project", None)
+        result.pop("team", None)
+    return result
 
 
 def _split_tags(raw: Any) -> list[str]:
@@ -137,13 +199,46 @@ def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) ->
     else:
         service = service_or_registry
     try:
+        if name == "tacit_setup":
+            # Same block the CLI installer and the MCP prompt emit. Offered as
+            # a tool because tools reach every client and transport, while MCP
+            # prompts are unsupported by Copilot Studio and — on the Functions
+            # runtime today — cannot be invoked over HTTP at all.
+            from .clients import agents_md_snippet
+
+            existing = service.list("/")
+            return {
+                "project": service.project,
+                "team": service.team,
+                "existing_memories": len(existing),
+                "instructions_block": agents_md_snippet(service.project),
+                "write_to": [
+                    "AGENTS.md",
+                    "CLAUDE.md (only if it already exists)",
+                    ".github/copilot-instructions.md (only if it already exists)",
+                ],
+                "next_steps": (
+                    "Write the block into AGENTS.md, replacing any existing "
+                    "'Organizational memory' section rather than appending a "
+                    "second copy. Preserve the rest of the file. Do not commit "
+                    "— leave the change for the user to review. Then tell them "
+                    "the project slug, the files written, and the two habits "
+                    "now in force: search memory before exploring the repo, "
+                    "and store durable learnings as you work."
+                ),
+            }
         if name == "memory_search":
             hits = service.search(
                 str(args.get("query", "")),
-                top=int(args.get("top") or 3),
+                # Clamped: `top` reaches the service as a fetch size, and an
+                # agent asking for thousands would pull full section text for
+                # the whole organization into one tool result.
+                top=max(1, min(int(args.get("top") or 3), MAX_SEARCH_TOP)),
                 category=str(args.get("category") or ""),
+                scope=str(args.get("scope") or ""),
+                entity=str(args.get("entity") or ""),
             )
-            return [_hit_result(h) for h in hits]
+            return [_hit_result(h, service.project) for h in hits]
         if name == "memory_brief":
             return {"brief": service.brief()}
         if name == "memory_read":
@@ -160,6 +255,7 @@ def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) ->
                     str(args["content"]),
                     category=str(args.get("category") or "general"),
                     tags=_split_tags(args.get("tags")),
+                    visibility=str(args.get("visibility") or "") or None,
                 )
             )
         if name == "memory_update":
@@ -168,6 +264,7 @@ def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) ->
                     str(args["path"]),
                     str(args["expected_sha256"]),
                     content=str(args["content"]) if args.get("content") is not None else None,
+                    visibility=str(args.get("visibility") or "") or None,
                 )
             )
         if name == "memory_delete":
@@ -193,4 +290,9 @@ def call_tool(service_or_registry: Any, name: str, arguments: dict[str, Any]) ->
         return {"error": "duplicate_path", "path": exc.path, "hint": "Use memory_update."}
     except StoreFullError as exc:
         return {"error": "store_full", "limit": exc.limit}
+    except ValueError as exc:
+        # A bad scope or visibility is the agent mis-calling the tool, not a
+        # server fault. Returning it structurally lets the agent correct itself;
+        # raising would surface as an opaque transport error it cannot act on.
+        return {"error": "invalid_argument", "detail": str(exc)}
     raise ValueError(f"unknown tool {name!r}")

@@ -1,12 +1,14 @@
-# tacit — team memory for your AI agent (2-minute setup)
+# tacit — organizational memory for your AI agent (2-minute setup)
 
 Our agents now share one memory: gotchas, conventions, and decisions learned
-by anyone's Copilot/Claude session are instantly available to everyone else's.
-You connect once; your agent does the rest.
+by anyone's Copilot/Claude session are instantly available to everyone else's —
+**including people on other teams and in other repos**. You connect once; your
+agent does the rest.
 
-## What you need (from Sunil)
+## What you need (from your admin)
 
-- **Endpoint:** `https://func-tacit-enhjckqpox6lm.azurewebsites.net/runtime/webhooks/mcp`
+- **Endpoint:** `https://<app>.azurewebsites.net/runtime/webhooks/mcp`
+  (your admin gets this from `tacit install --function-app <app>`)
 - **Access key:** shared separately (Teams/secret channel — never commit it)
 
 Nothing to install, no Azure access, no repo to clone.
@@ -16,9 +18,9 @@ Nothing to install, no Azure access, no repo to clone.
 **Claude Code** (one command):
 
 ```bash
-export TACIT_KEY=<key-from-sunil>
+export TACIT_KEY=<key-from-your-admin>
 claude mcp add --transport http tacit \
-  https://func-tacit-enhjckqpox6lm.azurewebsites.net/runtime/webhooks/mcp \
+  https://<app>.azurewebsites.net/runtime/webhooks/mcp \
   --header "x-functions-key: $TACIT_KEY"
 ```
 
@@ -38,7 +40,7 @@ Code prompts each person for the key on first use):
   "servers": {
     "tacit": {
       "type": "http",
-      "url": "https://func-tacit-enhjckqpox6lm.azurewebsites.net/runtime/webhooks/mcp",
+      "url": "https://<app>.azurewebsites.net/runtime/webhooks/mcp",
       "headers": { "x-functions-key": "${input:tacit-key}" }
     }
   }
@@ -48,32 +50,68 @@ Code prompts each person for the key on first use):
 **Copilot CLI** — merge into `~/.copilot/mcp-config.json` with the same
 `type: http` / `url` / `headers` block.
 
-## How to use it — four slash commands
+## First thing you do: ask for `tacit_setup`
 
-Your client discovers these automatically from the server (Claude Code shows
-them as `/mcp__tacit__<name>`; VS Code lists them in the prompt picker):
+Once you're connected, in the repo you're working on, tell your agent:
 
-| Prompt | When | What happens |
-|---|---|---|
-| `tacit_onboard` | First time in a repo | Agent pulls the project's memory and briefs you: setup, gotchas, conventions |
-| `tacit_recall` | You have a question | Agent answers from team memory first (cites sources); explores the repo only if memory has nothing |
-| `tacit_remember` | You just learned something the team should keep | Agent distills it into a well-formed memory and stores it |
-| `tacit_harvest` | End of a work session | Agent sweeps the whole session and stores every durable learning |
+> **"Run tacit_setup for this repo and write the instructions."**
 
-You can also just talk: *"check team memory for deploy gotchas"* or *"store
-that in team memory"* — the agent has the tools either way.
+Your agent calls the `tacit_setup` tool, gets the standing instructions, and
+writes them into the repo's `AGENTS.md` (and `CLAUDE.md` /
+`.github/copilot-instructions.md` if you already have them). Review the change
+and commit it — everyone else on the repo then gets the behaviour too.
+
+That's the part that makes it stick. Connecting the server only gives your agent
+the *ability* to use memory; the instructions are what make it actually do so
+without you asking, every session.
+
+## Day-to-day
+
+Just talk to your agent — the tools are always available:
+
+- *"check team memory before you start"*
+- *"has anyone else hit this? check other teams"*
+- *"store that in team memory"*
+- *"sweep this session and save anything worth keeping"*
+
+> **No slash commands over this endpoint — by design.** The Azure Functions MCP
+> prompt trigger cannot serve prompts over HTTP today (invoking one returns an
+> error), so rather than advertise commands that fail, the server offers none.
+> Everything they would have done, you can ask for in plain language above, and
+> `tacit_setup` is a normal tool that always works. Nothing is missing —
+> `/tacit_*` commands simply won't appear, and that's expected.
 
 ## Which project's memory? Automatic.
 
 One endpoint serves all our projects. Your agent infers the project from the
 **repository folder name** (`~/work/payments-api` → `payments-api`) and says
 which one it's using — correct it in chat if it guessed wrong. A project's
-store is created automatically on its first write, so new repos just work.
+memories are created automatically on first write, so new repos just work.
+
+## Reading across teams
+
+By default a search covers **your repo plus everything other teams have
+published**. When a result came from somewhere else, your agent will say so —
+treat it as a strong lead about how they solved it, not as gospel about your
+repo. If your repo's memory is empty on something, ask the agent to *"check
+what other teams know"* and it will search org-wide only.
+
+When you store something, it is shared org-wide by default. Write titles that
+make sense to someone who has never seen your repo ("the payments gateway
+lowercases webhook headers", not "the gateway does that thing"). If a note
+genuinely should not travel — unannounced work, team-internal process — tell
+your agent to store it as `team` or `private`.
+
+> **That is about relevance, not secrecy.** Everyone with this endpoint and key
+> can reach anything marked org-wide, and the endpoint cannot tell us apart.
+> Never store secrets, credentials, or need-to-know material in any memory,
+> whatever its visibility.
 
 ## Ground rules
 
 - **Store:** non-obvious fixes, gotchas that cost you >15 minutes, decisions
-  and their why, conventions. One fact per memory, descriptive title.
+  and their why, conventions. One fact per memory, descriptive title that
+  stands alone outside your repo.
 - **Don't store:** secrets/keys/tokens (ever), transient debugging state,
   anything obvious from reading the code.
 - Memory is versioned and attributed — updates append, nothing is erased, and
@@ -83,6 +121,7 @@ store is created automatically on its first write, so new repos just work.
 ## The habit that makes this work
 
 End every substantial session with **`tacit_harvest`**. Thirty seconds; it's
-what turns your session's pain into the next person's shortcut. The whole
-point: the second engineer on any problem should start where the first one
-finished.
+what turns your session's pain into the next person's shortcut — and at this
+point "the next person" might be on a team you've never met. The whole point:
+the second engineer on any problem, anywhere in the org, should start where the
+first one finished.

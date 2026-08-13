@@ -1,46 +1,26 @@
 """The Functions MCP runtime, tested without a Functions host: every tool in
 TOOL_DEFINITIONS must register an mcpToolTrigger function, and the handlers
-must dispatch through the shared tool surface."""
+must dispatch through the shared tool surface.
+
+The app module itself is imported once per session by ``conftest.py`` — it has
+import-time registration side effects, so importing it here too would
+double-register every trigger.
+"""
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-FUNCTIONS_DIR = str(Path(__file__).resolve().parents[1] / "functions")
 
-
-@pytest.fixture(scope="module")
-def function_app(tmp_path_factory):
-    root = tmp_path_factory.mktemp("store")
-    # The app builds its service from env at first call; point it at a local store.
-    import os
-
-    os.environ["TACIT_BACKEND"] = "local"
-    os.environ["TACIT_LOCAL_ROOT"] = str(root)
-    sys.path.insert(0, FUNCTIONS_DIR)
-    try:
-        import function_app  # noqa: PLC0415
-
-        yield function_app
-    finally:
-        sys.path.remove(FUNCTIONS_DIR)
-        os.environ.pop("TACIT_BACKEND")
-        os.environ.pop("TACIT_LOCAL_ROOT")
-
-
-# get_functions() is not idempotent (its name validation accumulates state),
-# so snapshot the registry once for all tests. Tools only — the prompt
-# triggers registered alongside them are covered in test_prompts.py.
-@pytest.fixture(scope="module")
-def functions_by_name(function_app):
-    registered = {}
-    for f in function_app.app.get_functions():
-        raw = json.loads(str(f.get_raw_bindings()[0]))
-        if raw["type"] == "mcpToolTrigger":
-            registered[f.get_function_name()] = f
-    return registered
+# Tools only — the prompt triggers registered alongside them are covered in
+# test_prompts.py, and the HTTP routes in test_graph_endpoints.
+@pytest.fixture(scope="session")
+def functions_by_name(registered_bindings):
+    return {
+        name: fn
+        for name, raw, fn in registered_bindings
+        if raw["type"] == "mcpToolTrigger"
+    }
 
 
 def test_every_tool_registers_a_function(functions_by_name):

@@ -69,6 +69,7 @@ def test_every_definition_dispatches(service):
     """Each declared tool must be handled by call_tool (no drift)."""
     created = call_tool(service, "memory_create", {"path": "/a.md", "content": "# A", "category": "onboarding"})
     smoke_args = {
+        "tacit_setup": {},
         "memory_search": {"query": "a"},
         "memory_brief": {},
         "memory_read": {"path": "/a.md"},

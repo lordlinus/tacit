@@ -18,8 +18,17 @@ class Settings(BaseSettings):
     # Azure AI Search service hosting the team memory indexes.
     search_endpoint: str = Field(default="")
 
-    # Project slug — one memory store (index pair) per project.
+    # Project slug — the repo/workspace a memory belongs to. One shared index
+    # set holds every project; this says which one this process writes to.
     project: str = Field(default="default")
+
+    # Owning team. Purely descriptive for search, but load-bearing for
+    # visibility="team" memories, which only this team's projects can read.
+    team: str = Field(default="")
+
+    # Visibility stamped on memories that don't ask for one: "org" by default,
+    # because knowledge that cannot leave its team is not organizational memory.
+    default_visibility: str = Field(default="org")
 
     # "local" (JSON files under local_root) or "search" (Azure AI Search).
     backend: str = Field(default="local")
@@ -31,6 +40,12 @@ class Settings(BaseSettings):
     # Auth: "default-credential" (keyless) or "azure-cli".
     auth_mode: str = Field(default="default-credential")
     tenant_id: str = Field(default="")
+
+    def viewer(self):
+        """Who this server is, for permission decisions. Never caller-supplied."""
+        from .scope import Viewer
+
+        return Viewer(project=self.project, team=self.team)
 
     def require(self, *names: str) -> None:
         missing = [n for n in names if not getattr(self, n, "")]
@@ -54,22 +69,46 @@ def load_settings(**overrides: str) -> Settings:
     return settings
 
 
-def build_service(settings: Settings):
-    """Wire a MemoryService onto the configured backend."""
+def build_service(settings: Settings, viewer=None):
+    """Wire a MemoryService onto the configured backend.
+
+    Both backends are organization-wide stores that this service writes into
+    on behalf of one project, so the project is passed to the service rather
+    than baked into a store name or directory. ``viewer`` overrides who
+    permission is evaluated against; the registry supplies the server's own
+    identity so a routed project cannot escalate.
+    """
+    from .models import Visibility
     from .service import MemoryService
 
+    resolved_viewer = viewer or settings.viewer()
     if settings.backend == "search":
         from .search_store import SearchStore
 
         settings.require("search_endpoint")
-        store = SearchStore(settings)
+        store = SearchStore(settings, viewer=resolved_viewer)
     else:
         from pathlib import Path
 
         from .local_store import LocalStore
 
-        store = LocalStore(Path(settings.local_root) / settings.project)
-    return MemoryService(store, actor=settings.actor)
+        # One root for every project, mirroring the shared index set — so the
+        # local backend can answer cross-project searches too and the hermetic
+        # tests exercise the same behaviour as Azure.
+        store = LocalStore(
+            Path(settings.local_root),
+            project=settings.project,
+            team=settings.team,
+            viewer=resolved_viewer,
+        )
+    return MemoryService(
+        store,
+        actor=settings.actor,
+        project=settings.project,
+        team=settings.team,
+        default_visibility=Visibility(settings.default_visibility),
+        viewer=resolved_viewer,
+    )
 
 
 def slugify_project(name: str) -> str:
@@ -99,7 +138,13 @@ def infer_project_from_cwd() -> str:
 
 class ServiceRegistry:
     """One MemoryService per project slug over shared settings — how a single
-    MCP server (one endpoint) serves many projects."""
+    MCP server (one endpoint) serves many projects.
+
+    The routed project changes *which* memories a call operates on; it never
+    changes *what the caller is allowed to see*. Permission is always evaluated
+    against the viewer built from this server's own configuration, so naming
+    another team's project cannot reveal that team's private memories.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -113,5 +158,5 @@ class ServiceRegistry:
         slug = slugify_project(project) if project.strip() else self._settings.project
         if slug not in self._services:
             scoped = self._settings.model_copy(update={"project": slug})
-            self._services[slug] = build_service(scoped)
+            self._services[slug] = build_service(scoped, viewer=self._settings.viewer())
         return self._services[slug]

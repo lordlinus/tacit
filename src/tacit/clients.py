@@ -121,19 +121,34 @@ def agents_md_snippet(project: str) -> str:
     """Drop into the target repo's AGENTS.md / CLAUDE.md so agents actually
     use the memory — wiring without instructions gets ignored."""
     return f"""\
-## Team memory (tacit MCP server)
+## Organizational memory (tacit MCP server)
 
-This project has a shared team memory ('{project}'). Use it without being asked:
+This project ('{project}') shares a searchable memory with the rest of the
+organization. Use it without being asked:
 
+- **Pass `project: "{project}"` on every memory tool call.** One endpoint serves
+  every repo; without it your calls go to the server's default project and this
+  repo's memory is neither read nor written.
 - **Before exploring the repo** for setup steps, architecture, conventions, or
   debugging a weird failure: call `memory_search` first; call `memory_brief`
   once when you first start working here. Prior engineers' agents have already
-  stored the gotchas.
+  stored the gotchas — and `memory_search` reaches other teams too, so a problem
+  another team solved will surface here.
+- **A hit carrying a `project` field came from another team.** Say so when you
+  use it, and treat it as a strong lead about how they solved it rather than
+  settled fact for this repo.
+- **If this repo's memory is empty on a question**, search again with
+  `scope: "org"` before falling back to reading code.
 - **When you learn something durable** — a non-obvious fix, a convention, a
   decision, a gotcha that cost real time — store it with `memory_create`
   (one focused fact per memory, '# Title' heading, category:
-  onboarding|gotcha|architecture|convention). Update stale memories with
-  `memory_read` -> `memory_update` (requires expected_sha256; on sha_conflict,
-  re-read and retry).
+  onboarding|gotcha|architecture|convention). Write the title so it makes sense
+  to someone outside this repo; it is shared org-wide by default.
+- **Keep memories current.** If you find one that is now wrong or incomplete,
+  `memory_read` it and `memory_update` with the corrected fact (requires
+  `expected_sha256` from that read; on `sha_conflict`, re-read and retry).
+  A confidently stale memory is worse than none.
+- Pass `visibility: "team"` or `"private"` only for unannounced work or
+  team-internal process notes.
 - Do **not** store secrets, transient debugging state, or anything trivially
   derivable from the code."""

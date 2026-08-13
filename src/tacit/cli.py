@@ -8,17 +8,23 @@ from pathlib import Path
 import typer
 
 from .config import Settings, build_service, load_settings
+from .ontology import KINDS
 
 app = typer.Typer(help="Shared team memory for AI agents on Azure AI Search.", no_args_is_help=True)
 
 
-def _settings(backend: str = "", project: str = "", search_endpoint: str = "") -> Settings:
-    return load_settings(backend=backend, project=project, search_endpoint=search_endpoint)
+def _settings(
+    backend: str = "", project: str = "", search_endpoint: str = "", team: str = ""
+) -> Settings:
+    return load_settings(
+        backend=backend, project=project, search_endpoint=search_endpoint, team=team
+    )
 
 
 _BACKEND_OPT = typer.Option("", help="local | search (default from TACIT_BACKEND)")
-_PROJECT_OPT = typer.Option("", help="Project slug (one store per project)")
+_PROJECT_OPT = typer.Option("", help="Project slug (the repo this memory belongs to)")
 _ENDPOINT_OPT = typer.Option("", help="Azure AI Search endpoint (search backend)")
+_TEAM_OPT = typer.Option("", help="Owning team (default from TACIT_TEAM)")
 
 
 @app.command()
@@ -26,7 +32,11 @@ def provision(
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
-    """Create the tm-<project> indexes on Azure AI Search (idempotent)."""
+    """Create the shared organization-wide indexes (idempotent).
+
+    Run once per Azure AI Search service, not once per team: every project
+    writes into the same index set, which is what lets one team's memory answer
+    another team's question."""
     from .azure_common import build_credential
     from .search_index import provision as provision_indexes
 
@@ -43,8 +53,10 @@ def reindex(
 ) -> None:
     """Rebuild the chunks index from the memories index.
 
-    Run once per project provisioned before section-level search; re-running is
-    harmless because chunk keys are derived from path + section slug."""
+    Run this after changing the shared vocabulary: entity annotations are
+    written onto chunks, so memories stored earlier keep their old ones until
+    re-projected. Re-running is harmless — chunk keys are derived from project +
+    path + section slug, so it converges."""
     settings = _settings(backend="search", project=project, search_endpoint=search_endpoint)
     settings.require("search_endpoint")
     count = build_service(settings).reindex()
@@ -58,8 +70,12 @@ def add(
     file: Path = typer.Option(None, help="Read the body from a markdown file"),
     category: str = typer.Option("general", help="onboarding|gotcha|architecture|convention|general"),
     tags: str = typer.Option("", help="Comma-separated tags"),
+    visibility: str = typer.Option(
+        "", help="org (default) | team | private — who outside this project may read it"
+    ),
     backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
+    team: str = _TEAM_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Store one memory directly — no agent needed. Body comes from --content,
@@ -74,11 +90,21 @@ def add(
         body = sys.stdin.read()
     else:
         raise typer.BadParameter("provide --content, --file, or pipe the body on stdin")
-    service = build_service(_settings(backend, project, search_endpoint))
-    memory = service.create(
-        path, body, category=category, tags=[t.strip() for t in tags.split(",") if t.strip()]
+    service = build_service(_settings(backend, project, search_endpoint, team))
+    try:
+        memory = service.create(
+            path,
+            body,
+            category=category,
+            tags=[t.strip() for t in tags.split(",") if t.strip()],
+            visibility=visibility or None,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--visibility") from exc
+    typer.echo(
+        f"+ {memory.path} (v{memory.version}, {memory.category}, {memory.visibility}) "
+        f"'{memory.title}'"
     )
-    typer.echo(f"+ {memory.path} (v{memory.version}, {memory.category}) '{memory.title}'")
 
 
 @app.command()
@@ -109,18 +135,26 @@ def seed(
 def search(
     query: str,
     top: int = typer.Option(3, help="Max results"),
+    scope: str = typer.Option(
+        "", help="project | project+org (default) | org — how far across the org to look"
+    ),
     backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
+    team: str = _TEAM_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
-    """Search the team memory (what an agent's memory_search call returns)."""
-    service = build_service(_settings(backend, project, search_endpoint))
-    hits = service.search(query, top=top)
+    """Search the organization's memory (what an agent's memory_search returns)."""
+    service = build_service(_settings(backend, project, search_endpoint, team))
+    try:
+        hits = service.search(query, top=top, scope=scope or None)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--scope") from exc
     if not hits:
         typer.echo("no hits")
         raise typer.Exit(0)
     for hit in hits:
-        typer.echo(f"--- {hit.path}  (score {hit.score}, {hit.category})")
+        origin = "" if hit.project == service.project else f"  [from {hit.project}]"
+        typer.echo(f"--- {hit.path}  (score {hit.score}, {hit.category}){origin}")
         typer.echo(hit.content.rstrip("\n"))
 
 
@@ -227,6 +261,9 @@ def install(
             f"#   az functionapp keys list -g <rg> -n {function_app} "
             "--query systemKeys.mcp_extension -o tsv\n"
         )
+        typer.echo("# THEN, in each repo, they run the `tacit_setup` prompt once —")
+        typer.echo("# it writes the standing instructions so their agent uses memory")
+        typer.echo("# without being asked. Connecting alone does nothing.\n")
         typer.echo("# Claude Code:\n")
         typer.echo(f"    export TACIT_KEY=<key>   # then:")
         typer.echo(f"    {clients.claude_code_remote_command(function_app)}\n")
@@ -245,8 +282,89 @@ def install(
     typer.echo(clients.vscode_mcp_json(wiring) + "\n")
     typer.echo("# Copilot CLI — merge into ~/.copilot/mcp-config.json:\n")
     typer.echo(clients.copilot_cli_json(wiring) + "\n")
-    typer.echo("# Add to the project's AGENTS.md / CLAUDE.md so agents actually use it:\n")
+    typer.echo("# Add to the project's AGENTS.md / CLAUDE.md so agents actually use it:")
+    typer.echo("# (or just run the `tacit_setup` prompt in the repo and let the agent do it)\n")
     typer.echo(clients.agents_md_snippet(project))
+
+
+@app.command()
+def ui(
+    port: int = typer.Option(8765, help="Port to serve on"),
+    host: str = typer.Option("127.0.0.1", help="Bind address (localhost by default)"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open a browser"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    team: str = _TEAM_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Serve the cross-team overlap graph locally.
+
+    The same page and JSON the deployed Function App serves, but reading through
+    your own identity, so a graph can be demoed before anything is deployed.
+    Binds to localhost by default — the graph aggregates across every project
+    you can see, which is not something to expose on a shared interface."""
+    import http.server
+    import json as _json
+    import threading
+    import webbrowser
+
+    from .ui import PAGE
+
+    service = build_service(_settings(backend, project, search_endpoint, team))
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _send(self, body: bytes, content_type: str, status: int = 200) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+            route = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if route in ("/", "/ui"):
+                self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif route in ("/graph", "/ui/graph"):
+                try:
+                    payload = _json.dumps(service.graph(), ensure_ascii=False, default=str)
+                    self._send(payload.encode("utf-8"), "application/json")
+                except Exception as exc:  # noqa: BLE001 - surfaced to the page
+                    self._send(
+                        _json.dumps({"error": str(exc)}).encode("utf-8"),
+                        "application/json", 500,
+                    )
+            else:
+                self._send(b"not found", "text/plain", 404)
+
+        def log_message(self, *args) -> None:
+            return  # keep the terminal readable during a demo
+
+    try:
+        server = http.server.ThreadingHTTPServer((host, port), Handler)
+    except OSError as exc:
+        raise typer.BadParameter(
+            f"could not bind {host}:{port} ({exc.strerror}). "
+            "Pass a different --port.",
+            param_hint="--port",
+        ) from exc
+    url = f"http://{host}:{port}/"
+    stats = service.graph()["stats"]
+    typer.echo(
+        f"{stats['entities']} entities, {stats['shared_entities']} shared across teams, "
+        f"{stats['visible_memories']} memories visible to '{service.project}'"
+    )
+    if not stats["vocabulary_size"]:
+        typer.echo("vocabulary is empty — add entries with `tacit ontology add` for a graph")
+    typer.echo(f"serving {url}  (ctrl-c to stop)")
+    if open_browser:
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("\nstopped")
+    finally:
+        server.server_close()
 
 
 @app.command()
@@ -265,12 +383,138 @@ def stats(
         raise typer.Exit(0)
     by_category = Counter(m.category for m in memories)
     by_author = Counter(m.updated_by for m in memories)
+    by_visibility = Counter(str(m.visibility) for m in memories)
     newest = max(memories, key=lambda m: m.updated)
     total_versions = sum(m.version for m in memories)
-    typer.echo(f"{len(memories)} active memories, {total_versions} versions written")
+    typer.echo(f"project '{service.project}': {len(memories)} active memories, "
+               f"{total_versions} versions written")
     typer.echo("by category: " + ", ".join(f"{k}={v}" for k, v in by_category.most_common()))
     typer.echo("contributors: " + ", ".join(f"{k}={v}" for k, v in by_author.most_common()))
+    typer.echo("shared as: " + ", ".join(f"{k}={v}" for k, v in by_visibility.most_common()))
     typer.echo(f"latest write: {newest.path} by {newest.updated_by} at {newest.updated.isoformat()}")
+
+
+ontology_app = typer.Typer(
+    help="Curate the organization's shared vocabulary (canonical names + aliases).",
+    no_args_is_help=True,
+)
+app.add_typer(ontology_app, name="ontology")
+
+
+@ontology_app.command("list")
+def ontology_list(
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Show every canonical entity and the aliases teams actually type."""
+    service = build_service(_settings(backend, project, search_endpoint))
+    entities = service.ontology().entities
+    if not entities:
+        typer.echo(
+            "vocabulary is empty — add entries with `tacit ontology add`, or "
+            "import a file with `tacit ontology import`"
+        )
+        raise typer.Exit(0)
+    for entity in sorted(entities, key=lambda e: e.id):
+        aliases = ", ".join(entity.aliases) or "(no aliases)"
+        typer.echo(f"{entity.id}  [{entity.kind}]  {entity.name}\n    aka: {aliases}")
+
+
+@ontology_app.command("add")
+def ontology_add(
+    name: str = typer.Argument(..., help="Canonical name, e.g. 'Payments Gateway'"),
+    aliases: str = typer.Option("", help="Comma-separated aliases teams actually type"),
+    kind: str = typer.Option(
+        "concept", help=f"{'|'.join(KINDS)} (free-form; these are just the common ones)"
+    ),
+    description: str = typer.Option("", help="One line: what it is"),
+    entity_id: str = typer.Option("", "--id", help="Slug (default: derived from the name)"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Teach the organization that several names mean one thing.
+
+    Re-running with the same id replaces that entry, so this is also how you
+    add an alias to an existing entity."""
+    from .ontology import Entity, Ontology, slugify_entity
+
+    service = build_service(_settings(backend, project, search_endpoint))
+    current = service.ontology()
+    new = Entity(
+        id=entity_id or slugify_entity(name),
+        name=name,
+        aliases=tuple(a.strip() for a in aliases.split(",") if a.strip()),
+        kind=kind,
+        description=description,
+    )
+    kept = [e for e in current.entities if e.id != new.id]
+    count = service.set_ontology(Ontology(entities=[*kept, new]))
+    typer.echo(f"+ {new.id} ({new.kind}) '{new.name}' — {len(new.aliases)} alias(es)")
+    typer.echo(f"vocabulary now holds {count} entities")
+    typer.echo("run `tacit reindex` to apply it to memories already stored")
+
+
+@ontology_app.command("remove")
+def ontology_remove(
+    entity_id: str = typer.Argument(..., help="Entity id to drop"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Drop one entity from the vocabulary."""
+    from .ontology import Ontology
+
+    service = build_service(_settings(backend, project, search_endpoint))
+    current = service.ontology()
+    if current.get(entity_id) is None:
+        typer.echo(f"no entity {entity_id!r} in the vocabulary")
+        raise typer.Exit(1)
+    kept = [e for e in current.entities if e.id != entity_id]
+    service.set_ontology(Ontology(entities=kept))
+    typer.echo(f"- {entity_id}\nrun `tacit reindex` to apply it")
+
+
+@ontology_app.command("import")
+def ontology_import(
+    file: Path = typer.Argument(..., help="JSON: {'entities':[{id,name,aliases,kind}]}"),
+    replace: bool = typer.Option(False, help="Replace the vocabulary instead of merging"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Load a vocabulary file (merges by id unless --replace)."""
+    from .ontology import Ontology
+
+    service = build_service(_settings(backend, project, search_endpoint))
+    incoming = Ontology.from_dict(json.loads(file.read_text(encoding="utf-8")))
+    if replace:
+        merged = incoming.entities
+    else:
+        incoming_ids = {e.id for e in incoming.entities}
+        merged = [e for e in service.ontology().entities if e.id not in incoming_ids]
+        merged += incoming.entities
+    count = service.set_ontology(Ontology(entities=merged))
+    typer.echo(f"vocabulary now holds {count} entities")
+    typer.echo("run `tacit reindex` to apply it to memories already stored")
+
+
+@ontology_app.command("export")
+def ontology_export(
+    out: Path = typer.Option(None, help="Write here instead of stdout"),
+    backend: str = _BACKEND_OPT,
+    project: str = _PROJECT_OPT,
+    search_endpoint: str = _ENDPOINT_OPT,
+) -> None:
+    """Dump the vocabulary as JSON (round-trips through `ontology import`)."""
+    service = build_service(_settings(backend, project, search_endpoint))
+    payload = json.dumps(service.ontology().to_dict(), indent=2, ensure_ascii=False)
+    if out is None:
+        typer.echo(payload)
+    else:
+        out.write_text(payload + "\n", encoding="utf-8")
+        typer.echo(f"wrote {out}")
 
 
 def parse_memory_file(text: str) -> tuple[dict[str, str], str]:

@@ -212,10 +212,9 @@ def render(results: list[ScenarioResult], seed_cost: int, backend: str = "local"
         "  the question text, and the model's own answer tokens.",
         "- 'warm answered?' verifies the expected fact is literally present in",
         "  the returned memories — cheap-but-wrong would not count.",
-        "- Re-run against the real backend with",
-        "  `tacit bench --backend search --project <slug>`; the last such run",
-        "  scored **64%**, all six answered, confirming this local number is not",
-        "  an artefact of the local ranker.",
+        "- These numbers come from the local backend's ranker. Re-run against",
+        "  Azure AI Search with `tacit bench --backend search --project <slug>`",
+        "  to confirm the saving is not an artefact of it.",
         "",
     ]
     return "\n".join(lines)

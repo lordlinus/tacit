@@ -51,14 +51,34 @@ def _register(name: str) -> None:
     description = TOOL_DEFINITIONS[name][0]
 
     # Explicit signatures per tool so MCP clients see real parameter schemas.
-    if name == "memory_search":
+    if name == "tacit_setup":
 
         @mcp.tool(name=name, description=description)
-        def _search(query: str, top: int = 3, category: str = "", project: str = "") -> Any:
+        def _setup(project: str = "") -> Any:
+            return call_tool(get_registry(), "tacit_setup", {"project": project})
+
+    elif name == "memory_search":
+
+        @mcp.tool(name=name, description=description)
+        def _search(
+            query: str,
+            top: int = 3,
+            category: str = "",
+            scope: str = "",
+            entity: str = "",
+            project: str = "",
+        ) -> Any:
             return call_tool(
                 get_registry(),
                 "memory_search",
-                {"query": query, "top": top, "category": category, "project": project},
+                {
+                    "query": query,
+                    "top": top,
+                    "category": category,
+                    "scope": scope,
+                    "entity": entity,
+                    "project": project,
+                },
             )
 
     elif name == "memory_brief":
@@ -83,22 +103,46 @@ def _register(name: str) -> None:
 
         @mcp.tool(name=name, description=description)
         def _create(
-            path: str, content: str, category: str = "general", tags: str = "", project: str = ""
+            path: str,
+            content: str,
+            category: str = "general",
+            tags: str = "",
+            visibility: str = "",
+            project: str = "",
         ) -> Any:
             return call_tool(
                 get_registry(),
                 "memory_create",
-                {"path": path, "content": content, "category": category, "tags": tags, "project": project},
+                {
+                    "path": path,
+                    "content": content,
+                    "category": category,
+                    "tags": tags,
+                    "visibility": visibility,
+                    "project": project,
+                },
             )
 
     elif name == "memory_update":
 
         @mcp.tool(name=name, description=description)
-        def _update(path: str, expected_sha256: str, content: str, project: str = "") -> Any:
+        def _update(
+            path: str,
+            expected_sha256: str,
+            content: str,
+            visibility: str = "",
+            project: str = "",
+        ) -> Any:
             return call_tool(
                 get_registry(),
                 "memory_update",
-                {"path": path, "expected_sha256": expected_sha256, "content": content, "project": project},
+                {
+                    "path": path,
+                    "expected_sha256": expected_sha256,
+                    "content": content,
+                    "visibility": visibility,
+                    "project": project,
+                },
             )
 
     elif name == "memory_delete":

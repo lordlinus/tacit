@@ -1,9 +1,15 @@
 """Azure AI Search backend — same MemoryStore protocol as LocalStore.
 
-Latest state is mergeOrUpload-ed into ``tm-<project>`` (key = path slug);
-every mutation also uploads an immutable doc to ``tm-<project>-versions``
-(key = path slug + version) and re-projects the memory's sections into
-``tm-<project>-chunks``, the index searches run against.
+Every project in the organization shares one index set. Latest state is
+mergeOrUpload-ed into ``tacit-memories`` (key = project + path slug); every
+mutation also uploads an immutable doc to ``tacit-versions`` and re-projects
+the memory's sections into ``tacit-chunks``, the index searches run against.
+
+Writes are always scoped to this store's project — a store can only ever
+mutate its own team's memories. Reads of a single memory (``get``, ``list``,
+``versions``, ``count``) are likewise project-scoped, because the sha
+precondition contract is per-project. Only ``search`` deliberately crosses the
+boundary, and only as far as ``scope`` and each memory's ``visibility`` allow.
 
 Search asks for the semantic ranker (L2 reranking + extractive captions) and
 falls back to plain BM25 when the service declines — semantic is a capacity
@@ -21,33 +27,112 @@ from urllib.parse import quote
 
 from .azure_common import SEARCH_API_VERSION, build_credential, request_json, search_headers
 from .config import Settings
-from .models import Memory, MemoryStatus, MemoryVersion, SearchHit, path_key
-from .search_index import SCORING_PROFILE, SEMANTIC_CONFIG, index_names
+from .models import (
+    DEFAULT_PROJECT,
+    HOME_PROJECT_BOOST,
+    Memory,
+    MemoryStatus,
+    MemoryVersion,
+    SearchHit,
+    SearchScope,
+    Visibility,
+    doc_key,
+)
+from .ontology import Entity, Ontology
+from .scope import Viewer, odata_quote, parse_scope, scope_filter
+from .search_index import ONTOLOGY_INDEX, SCORING_PROFILE, SEMANTIC_CONFIG, index_names
 from .sections import Section, narrow, snippet, split_sections
 
-SEARCH_FIELDS = "title,tags,heading,content"
-HIT_FIELDS = "path,section,heading,title,category,tags,content"
+SEARCH_FIELDS = "title,tags,heading,content,entity_vocabulary"
+HIT_FIELDS = "path,project,team,section,heading,title,category,tags,content"
+
+#: Azure AI Search semantically reranks only the top 50 candidates; asking for
+#: more mixes reranker scores with raw BM25 ones in a single ordering.
+SEMANTIC_RERANK_WINDOW = 50
+
+__all__ = ["SearchStore", "chunk_key", "odata_quote"]
 
 
-def odata_quote(value: str) -> str:
-    """Escape a string literal for an OData filter (single quotes double up)."""
-    return value.replace("'", "''")
-
-
-def chunk_key(path: str, section: str) -> str:
-    return f"{path_key(path)}--s-{section}"
+def chunk_key(project: str, path: str, section: str) -> str:
+    return f"{doc_key(project, path)}--s-{section}"
 
 
 class SearchStore:
-    def __init__(self, settings: Settings, credential: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        credential: Any | None = None,
+        *,
+        viewer: Viewer | None = None,
+    ) -> None:
         self._settings = settings
         self._endpoint = settings.search_endpoint.rstrip("/")
         self._credential = credential or build_credential(settings.auth_mode, settings.tenant_id)
-        self._memories_index, self._versions_index, self._chunks_index = index_names(
-            settings.project
-        )
+        # Public per the MemoryStore protocol: MemoryService falls back to these
+        # when not given an explicit project/team.
+        self.project = settings.project
+        self.team = settings.team
+        self._project = self.project
+        self._team = self.team
+        self._viewer = viewer or Viewer(project=self.project, team=self.team)
+        self._memories_index, self._versions_index, self._chunks_index = index_names()
         self._provisioned = False
         self._semantic_ok = True
+        self._ontology: Ontology | None = None
+
+    # -- scoping ---------------------------------------------------------------
+
+    def _own(self) -> str:
+        """Filter restricting a query to this store's project."""
+        return f"project eq '{odata_quote(self._project)}'"
+
+    # -- vocabulary ------------------------------------------------------------
+
+    def load_ontology(self, *, refresh: bool = False, strict: bool = False) -> Ontology:
+        """The organization's controlled vocabulary, cached per store.
+
+        Cached because it is read on every write and changes rarely. With
+        ``strict=False`` an unreachable vocabulary degrades to no annotation
+        rather than failing the write: memory is useful without it, and a
+        vocabulary outage must not stop someone recording what they just
+        learned. Callers that *derive a mutation* from the result must pass
+        ``strict=True`` — see :meth:`save_ontology`.
+        """
+        if self._ontology is not None and not refresh:
+            return self._ontology
+        try:
+            result = self._post(ONTOLOGY_INDEX, "/docs/search.post.search",
+                                {"search": "*", "top": 1000})
+            entities = [
+                Entity.from_dict(_strip_metadata(d)) for d in (result or {}).get("value", [])
+            ]
+            self._ontology = Ontology(entities=entities)
+        except Exception:  # noqa: BLE001 - vocabulary is an enhancement, not a dependency
+            if strict:
+                raise
+            self._ontology = Ontology()
+        return self._ontology
+
+    def save_ontology(self, ontology: Ontology) -> int:
+        """Replace the vocabulary. Callers re-chunk afterwards to apply it.
+
+        Reads strictly: the set of entities to delete is ``existing - keep``, so
+        a swallowed read error would make ``existing`` empty, emit no deletes,
+        and silently turn a replace or a removal into an additive merge — while
+        still reporting success.
+        """
+        existing = {e.id for e in self.load_ontology(refresh=True, strict=True).entities}
+        keep = {e.id for e in ontology.entities}
+        actions: list[dict] = [
+            {"@search.action": "delete", "id": entity_id} for entity_id in existing - keep
+        ]
+        actions += [
+            {"@search.action": "mergeOrUpload", **e.to_dict()} for e in ontology.entities
+        ]
+        if actions:
+            self._post(ONTOLOGY_INDEX, "/docs/search.index", {"value": actions})
+        self._ontology = ontology
+        return len(ontology.entities)
 
     # -- REST plumbing ---------------------------------------------------------
 
@@ -83,7 +168,8 @@ class SearchStore:
 
         url = (
             f"{self._endpoint}/indexes('{self._memories_index}')"
-            f"/docs('{quote(path_key(path), safe='')}')?api-version={SEARCH_API_VERSION}"
+            f"/docs('{quote(doc_key(self._project, path), safe='')}')"
+            f"?api-version={SEARCH_API_VERSION}"
         )
         try:
             doc = request_json(method="GET", url=url, headers=search_headers(self._credential))
@@ -116,16 +202,53 @@ class SearchStore:
             {"@search.action": "delete", "key": key} for key in self._chunk_keys(memory.path)
         ]
         if memory.status is MemoryStatus.ACTIVE:
+            ontology = self.load_ontology()
             live = {
-                chunk_key(memory.path, s.slug): s for s in split_sections(memory.content)
+                chunk_key(memory.project, memory.path, s.slug): s
+                for s in split_sections(memory.content)
             }
             actions = [a for a in actions if a["key"] not in live]
             actions += [
-                {"@search.action": "mergeOrUpload", **_chunk_doc(memory, key, section)}
+                {
+                    "@search.action": "mergeOrUpload",
+                    **_chunk_doc(memory, key, section, ontology),
+                }
                 for key, section in live.items()
             ]
         if actions:
             self._post(self._chunks_index, "/docs/search.index", {"value": actions})
+
+    def visible_memories(self, scope: SearchScope | str | None = None) -> list[Memory]:
+        """Every active memory the viewer may see, across projects.
+
+        Search was previously the only operation that crossed a project
+        boundary. The graph needs the same reach, and must obey exactly the
+        same rules — so it shares ``scope_filter`` rather than re-deriving them.
+        Paged, because a single response returns at most 1,000 rows and an
+        organization-wide query is precisely the case that exceeds it.
+        """
+        resolved = parse_scope(scope)
+        scoped = scope_filter(resolved, self._project, self._team, viewer=self._viewer)
+        memories: list[Memory] = []
+        skip = 0
+        page = 1000
+        while True:
+            result = self._post(
+                self._memories_index,
+                "/docs/search.post.search",
+                {
+                    "search": "*",
+                    "filter": f"status eq 'active' and {scoped}",
+                    "orderby": "project asc, path asc",
+                    "top": page,
+                    "skip": skip,
+                },
+            )
+            batch = (result or {}).get("value", [])
+            memories.extend(_memory_from_doc(d) for d in batch)
+            if len(batch) < page:
+                return memories
+            skip += page
 
     def reindex(self) -> int:
         """Rebuild the chunks index from the memories index, which is the system
@@ -142,7 +265,7 @@ class SearchStore:
             "/docs/search.post.search",
             {
                 "search": "*",
-                "filter": f"path eq '{odata_quote(path)}'",
+                "filter": f"{self._own()} and path eq '{odata_quote(path)}'",
                 "select": "key",
                 "top": 1000,
             },
@@ -150,29 +273,67 @@ class SearchStore:
         return [d["key"] for d in (result or {}).get("value", [])]
 
     def list(self, prefix: str = "/") -> list[Memory]:
-        result = self._post(
-            self._memories_index,
-            "/docs/search.post.search",
-            {
-                "search": "*",
-                "filter": "status eq 'active'",
-                "orderby": "path asc",
-                "top": 1000,
-            },
-        )
-        memories = [_memory_from_doc(d) for d in (result or {}).get("value", [])]
+        """Every active memory in this project, paged past the 1,000-row cap.
+
+        A single request returns at most 1,000 documents while a project may
+        hold up to the service cap, so a naive call would silently truncate —
+        and `reindex` builds the chunks index from this, meaning the untouched
+        remainder would exist but be unsearchable.
+        """
+        memories: list[Memory] = []
+        skip = 0
+        page = 1000
+        while True:
+            result = self._post(
+                self._memories_index,
+                "/docs/search.post.search",
+                {
+                    "search": "*",
+                    "filter": f"status eq 'active' and {self._own()}",
+                    "orderby": "path asc",
+                    "top": page,
+                    "skip": skip,
+                },
+            )
+            batch = (result or {}).get("value", [])
+            memories.extend(_memory_from_doc(d) for d in batch)
+            if len(batch) < page:
+                break
+            skip += page
         return [m for m in memories if m.path.startswith(prefix)]
 
-    def search(self, query: str, *, top: int = 5, category: str = "") -> list[SearchHit]:
-        """Rank sections, not whole memories, and return a snippet of each.
+    def search(
+        self,
+        query: str,
+        *,
+        top: int = 5,
+        category: str = "",
+        scope: SearchScope | str | None = None,
+        entity: str = "",
+    ) -> list[SearchHit]:
+        """Rank sections across every project the caller may see.
+
+        The scope filter is what makes this organizational rather than
+        per-team: one request reaches this project's memories and whatever the
+        rest of the org has published, and the two are ranked together. Results
+        are over-fetched, because the home-project boost and the one-hit-per-
+        memory rule both reorder and thin the service's ranking — trimming to
+        ``top`` before either would drop rows that should have survived.
+
+        ``entity`` restricts to chunks annotated with a canonical entity id,
+        which is the precise form of "everything the org knows about X"
+        regardless of what each team calls it.
 
         The semantic ranker supplies the caption; when it is unavailable the
         BM25 highlight, then a locally computed extract, stand in — so a hit
         always costs a snippet rather than an entire memory.
         """
-        filters = ""
+        resolved = parse_scope(scope)
+        filters = [scope_filter(resolved, self._project, self._team, viewer=self._viewer)]
         if category:
-            filters = f"category eq '{odata_quote(category)}'"
+            filters.append(f"category eq '{odata_quote(category)}'")
+        if entity:
+            filters.append(f"entities/any(e: e eq '{odata_quote(entity)}')")
         body: dict[str, Any] = {
             "search": query,
             "searchFields": SEARCH_FIELDS,
@@ -181,30 +342,31 @@ class SearchStore:
             "highlightPreTag": "",
             "highlightPostTag": "",
             "scoringProfile": SCORING_PROFILE,
-            "top": top,
+            "filter": " and ".join(filters),
+            "top": _overfetch(top),
         }
-        if filters:
-            body["filter"] = filters
         result = self._search_ranked(body)
-        hits = []
+        scored: list[tuple[float, SearchHit]] = []
         for doc in (result or {}).get("value", []):
             text, truncated = narrow(doc.get("content") or "", _extract_from(doc, query))
-            hits.append(
-                SearchHit(
-                    path=doc["path"],
-                    title=doc.get("title") or doc["path"],
-                    category=doc.get("category") or "general",
-                    tags=doc.get("tags") or [],
-                    score=float(
-                        doc.get("@search.rerankerScore") or doc.get("@search.score") or 0.0
-                    ),
-                    section=doc.get("section") or "",
-                    heading=doc.get("heading") or "",
-                    content=text,
-                    truncated=truncated,
-                )
+            project = doc.get("project") or ""
+            raw = float(doc.get("@search.rerankerScore") or doc.get("@search.score") or 0.0)
+            hit = SearchHit(
+                path=doc["path"],
+                title=doc.get("title") or doc["path"],
+                category=doc.get("category") or "general",
+                project=project or self._project,
+                team=doc.get("team") or "",
+                tags=doc.get("tags") or [],
+                score=raw,
+                section=doc.get("section") or "",
+                heading=doc.get("heading") or "",
+                content=text,
+                truncated=truncated,
             )
-        return hits
+            boosted = raw * (HOME_PROJECT_BOOST if project == self._project else 1.0)
+            scored.append((boosted, hit))
+        return _best_per_memory(scored, top)
 
     def _search_ranked(self, body: dict) -> dict | None:
         """Semantic first, BM25 if the service declines it. The downgrade is
@@ -235,7 +397,7 @@ class SearchStore:
             "/docs/search.post.search",
             {
                 "search": "*",
-                "filter": f"path eq '{odata_quote(path)}'",
+                "filter": f"{self._own()} and path eq '{odata_quote(path)}'",
                 "orderby": "version asc",
                 "top": 1000,
             },
@@ -246,9 +408,48 @@ class SearchStore:
         result = self._post(
             self._memories_index,
             "/docs/search.post.search",
-            {"search": "*", "filter": "status eq 'active'", "top": 0, "count": True},
+            {
+                "search": "*",
+                "filter": f"status eq 'active' and {self._own()}",
+                "top": 0,
+                "count": True,
+            },
         )
         return int((result or {}).get("@odata.count") or 0)
+
+
+def _overfetch(top: int) -> int:
+    """How many chunks to ask the service for to return ``top`` memories.
+
+    Several sections of one memory can match, and only the best is kept, so
+    asking for exactly ``top`` would routinely return fewer. Capped at 50
+    because that is the semantic reranker's window: rows beyond it come back
+    without ``@search.rerankerScore`` and would fall back to raw BM25, which is
+    on a different, unbounded scale — sorting the two together lets an
+    unreranked tail outrank the reranked head.
+    """
+    return max(min(top * 4, SEMANTIC_RERANK_WINDOW), min(top, SEMANTIC_RERANK_WINDOW))
+
+
+def _best_per_memory(scored: list[tuple[float, SearchHit]], top: int) -> list[SearchHit]:
+    """One hit per memory, best section first — the local backend's contract.
+
+    Sorting is by the boosted score but the hit keeps its raw one, so callers
+    compare like with like across projects and the home bias stays an internal
+    ranking decision rather than a number an agent might reason about.
+    """
+    ordered = sorted(scored, key=lambda pair: -pair[0])
+    hits: list[SearchHit] = []
+    seen: set[tuple[str, str]] = set()
+    for _boosted, hit in ordered:
+        identity = (hit.project, hit.path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        hits.append(hit)
+        if len(hits) >= top:
+            break
+    return hits
 
 
 def _is_semantic_rejection(exc: Exception) -> bool:
@@ -273,16 +474,31 @@ def _extract_from(doc: dict, query: str) -> str:
     return snippet(content, query)
 
 
-def _chunk_doc(memory: Memory, key: str, section: Section) -> dict:
+def _strip_metadata(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if not k.startswith("@search.")}
+
+
+def _chunk_doc(
+    memory: Memory, key: str, section: Section, ontology: Ontology | None = None
+) -> dict:
+    # Annotate against title + heading + body: an entity named only in the
+    # memory's title still governs every section beneath it.
+    ontology = ontology or Ontology()
+    entities = ontology.annotate(f"{memory.title}\n{section.heading}\n{section.text}")
     return {
         "key": key,
         "path": memory.path,
+        "project": memory.project,
+        "team": memory.team,
+        "visibility": str(memory.visibility),
         "section": section.slug,
         "heading": section.heading,
         "title": memory.title,
         "content": section.text,
         "category": memory.category,
         "tags": list(memory.tags),
+        "entities": entities,
+        "entity_vocabulary": ontology.vocabulary_for(entities),
         "updated": memory.updated.isoformat(),
     }
 
@@ -291,6 +507,9 @@ def _memory_doc(memory: Memory) -> dict:
     return {
         "key": memory.key,
         "path": memory.path,
+        "project": memory.project,
+        "team": memory.team,
+        "visibility": str(memory.visibility),
         "title": memory.title,
         "content": memory.content,
         "category": memory.category,
@@ -309,6 +528,9 @@ def _memory_from_doc(doc: dict) -> Memory:
     return Memory(
         path=doc["path"],
         content=doc.get("content") or "",
+        project=doc.get("project") or DEFAULT_PROJECT,
+        team=doc.get("team") or "",
+        visibility=Visibility(doc.get("visibility") or Visibility.ORG),
         category=doc.get("category") or "general",
         tags=doc.get("tags") or [],
         version=int(doc.get("version") or 1),
@@ -323,8 +545,9 @@ def _memory_from_doc(doc: dict) -> Memory:
 
 def _version_doc(version: MemoryVersion) -> dict:
     return {
-        "key": f"{path_key(version.path)}-v{version.version}",
+        "key": version.key,
         "path": version.path,
+        "project": version.project,
         "version": version.version,
         "operation": version.operation,
         "content": version.content,
@@ -337,6 +560,7 @@ def _version_doc(version: MemoryVersion) -> dict:
 def _version_from_doc(doc: dict) -> MemoryVersion:
     return MemoryVersion(
         path=doc["path"],
+        project=doc.get("project") or DEFAULT_PROJECT,
         version=int(doc["version"]),
         operation=doc.get("operation") or "update",
         content=doc.get("content") or "",
