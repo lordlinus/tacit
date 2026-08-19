@@ -23,11 +23,6 @@ on:
       - "scripts/sync_functions.sh"
       - ".github/workflows/deploy-functions.yml"
   workflow_dispatch:
-    inputs:
-      provision:
-        description: "Also run azd provision (infra changes)"
-        type: boolean
-        default: false
 
 # One deploy at a time; queued rather than cancelled, since cancelling mid-push
 # can leave the app on a half-uploaded package.
@@ -56,6 +51,7 @@ jobs:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
       AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
     steps:
@@ -70,26 +66,20 @@ jobs:
             --federated-credential-provider github \
             --tenant-id "$AZURE_TENANT_ID"
 
-      # The runner has no .azure/ directory, so the environment is recreated and
-      # then hydrated from the already-deployed infrastructure.
+      # The runner has no .azure/ directory, so the environment is recreated.
+      # AZURE_RESOURCE_GROUP must be set explicitly: a fresh environment
+      # otherwise defaults to rg-<env-name> and azd tries to create it.
+      #
+      # Deliberately no `azd env refresh` — it initializes the provisioning
+      # manager, which asserts the resource group exists and so needs write
+      # access this deploy identity does not have. `azd deploy` resolves the
+      # app from its `azd-service-name` tag instead, which is all it needs.
       - name: Restore the azd environment
         run: |
           azd env new "$AZURE_ENV_NAME" \
             --location "$AZURE_LOCATION" \
-            --subscription "$AZURE_SUBSCRIPTION_ID" \
-            --no-prompt
-          azd env refresh --no-prompt
-
-      - name: Provision infrastructure
-        if: inputs.provision
-        run: azd provision --no-prompt
+            --subscription "$AZURE_SUBSCRIPTION_ID"
+          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
 
       - name: Deploy
         run: azd deploy api --no-prompt
-
-      - name: Report the endpoint
-        run: |
-          app=$(azd env get-value FUNCTION_APP_NAME)
-          echo "### Deployed \`$app\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "MCP endpoint: \`https://$app.azurewebsites.net/runtime/webhooks/mcp\`" >> "$GITHUB_STEP_SUMMARY"
