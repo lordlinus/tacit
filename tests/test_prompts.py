@@ -4,7 +4,6 @@ runtimes expose them — stdio verified over the real wire protocol."""
 import asyncio
 import json
 import sys
-from pathlib import Path
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -54,17 +53,21 @@ class TestSetupPrompt:
         block = agents_md_snippet("<PROJECT_SLUG>")
         assert block in render("tacit_setup")
 
-    def test_the_tool_and_the_prompt_deliver_the_same_block(self, tmp_path):
+    def test_the_tool_and_the_prompt_deliver_the_same_block(self):
         """Prompts do not reach every client — Copilot Studio has none, and the
         Functions HTTP transport cannot invoke them today — so the same setup
         is offered as a tool. The two must not drift."""
         from tacit.clients import agents_md_snippet
-        from tacit.local_store import LocalStore
-        from tacit.service import MemoryService
         from tacit.tools import call_tool
 
-        service = MemoryService(LocalStore(tmp_path, project="demo"), project="demo")
-        result = call_tool(service, "tacit_setup", {})
+        class _Service:
+            project = "demo"
+            team = "platform"
+
+            def list(self, prefix="/"):
+                return []
+
+        result = call_tool(_Service(), "tacit_setup", {})
         assert result["instructions_block"] == agents_md_snippet("demo")
         assert result["project"] == "demo"
         assert "AGENTS.md" in result["write_to"][0]
@@ -106,11 +109,16 @@ def test_unknown_prompt_raises():
         render("dream_of_electric_sheep")
 
 
-def test_prompts_over_the_wire(tmp_path):
+def test_prompts_over_the_wire():
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "tacit.mcp_stdio"],
-        env={"TACIT_BACKEND": "local", "TACIT_LOCAL_ROOT": str(tmp_path)},
+        # Prompt rendering never touches the store, so the endpoint is only
+        # needed to satisfy configuration on startup.
+        env={
+            "TACIT_SEARCH_ENDPOINT": "https://srch-test.search.windows.net",
+            "TACIT_PROJECT": "test",
+        },
     )
 
     async def scenario():

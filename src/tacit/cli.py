@@ -13,17 +13,14 @@ from .ontology import KINDS
 app = typer.Typer(help="Shared team memory for AI agents on Azure AI Search.", no_args_is_help=True)
 
 
-def _settings(
-    backend: str = "", project: str = "", search_endpoint: str = "", team: str = ""
-) -> Settings:
-    return load_settings(
-        backend=backend, project=project, search_endpoint=search_endpoint, team=team
-    )
+def _settings(project: str = "", search_endpoint: str = "", team: str = "") -> Settings:
+    settings = load_settings(project=project, search_endpoint=search_endpoint, team=team)
+    settings.require("search_endpoint")
+    return settings
 
 
-_BACKEND_OPT = typer.Option("", help="local | search (default from TACIT_BACKEND)")
 _PROJECT_OPT = typer.Option("", help="Project slug (the repo this memory belongs to)")
-_ENDPOINT_OPT = typer.Option("", help="Azure AI Search endpoint (search backend)")
+_ENDPOINT_OPT = typer.Option("", help="Azure AI Search endpoint (default from TACIT_SEARCH_ENDPOINT)")
 _TEAM_OPT = typer.Option("", help="Owning team (default from TACIT_TEAM)")
 
 
@@ -40,8 +37,7 @@ def provision(
     from .azure_common import build_credential
     from .search_index import provision as provision_indexes
 
-    settings = _settings(backend="search", project=project, search_endpoint=search_endpoint)
-    settings.require("search_endpoint")
+    settings = _settings(project=project, search_endpoint=search_endpoint)
     credential = build_credential(settings.auth_mode, settings.tenant_id)
     typer.echo("provisioned indexes: " + ", ".join(provision_indexes(settings, credential)))
 
@@ -57,8 +53,7 @@ def reindex(
     written onto chunks, so memories stored earlier keep their old ones until
     re-projected. Re-running is harmless — chunk keys are derived from project +
     path + section slug, so it converges."""
-    settings = _settings(backend="search", project=project, search_endpoint=search_endpoint)
-    settings.require("search_endpoint")
+    settings = _settings(project=project, search_endpoint=search_endpoint)
     count = build_service(settings).reindex()
     typer.echo(f"reindexed {count} memories")
 
@@ -73,7 +68,6 @@ def add(
     visibility: str = typer.Option(
         "", help="org (default) | team | private — who outside this project may read it"
     ),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     team: str = _TEAM_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
@@ -90,7 +84,7 @@ def add(
         body = sys.stdin.read()
     else:
         raise typer.BadParameter("provide --content, --file, or pipe the body on stdin")
-    service = build_service(_settings(backend, project, search_endpoint, team))
+    service = build_service(_settings(project, search_endpoint, team))
     try:
         memory = service.create(
             path,
@@ -110,12 +104,11 @@ def add(
 @app.command()
 def seed(
     directory: Path = typer.Argument(..., help="Folder of .md memories (frontmatter: path/category/tags)"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Load a folder of markdown memories into the store."""
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     count = 0
     for file in sorted(directory.glob("*.md")):
         meta, content = parse_memory_file(file.read_text(encoding="utf-8"))
@@ -138,13 +131,12 @@ def search(
     scope: str = typer.Option(
         "", help="project | project+org (default) | org — how far across the org to look"
     ),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     team: str = _TEAM_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Search the organization's memory (what an agent's memory_search returns)."""
-    service = build_service(_settings(backend, project, search_endpoint, team))
+    service = build_service(_settings(project, search_endpoint, team))
     try:
         hits = service.search(query, top=top, scope=scope or None)
     except ValueError as exc:
@@ -161,12 +153,11 @@ def search(
 @app.command()
 def read(
     path: str,
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Read one memory in full (shows content_sha256 for updates)."""
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     memory = service.read(path)
     typer.echo(json.dumps(
         {"path": memory.path, "version": memory.version, "content_sha256": memory.content_sha256},
@@ -176,12 +167,11 @@ def read(
 
 @app.command()
 def brief(
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Print the onboarding pack (all 'onboarding'-category memories)."""
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     typer.echo(service.brief())
 
 
@@ -189,23 +179,20 @@ def brief(
 def dream(
     output_project: str = typer.Option(..., help="Fresh project slug for the curated output store"),
     transcripts: Path = typer.Option(None, help="Folder of session transcripts (.md/.txt/.jsonl)"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Curate the store into a NEW store: dedupe, supersede stale facts, mine
     transcripts for insights. The input store is never modified."""
+    from .azure_common import build_credential
     from .dream import dream as run_dream
     from .dream import load_transcripts
+    from .search_index import provision as provision_indexes
 
-    settings = _settings(backend, project, search_endpoint)
+    settings = _settings(project, search_endpoint)
     input_service = build_service(settings)
     output_settings = settings.model_copy(update={"project": output_project})
-    if output_settings.backend == "search":
-        from .azure_common import build_credential
-        from .search_index import provision as provision_indexes
-
-        provision_indexes(output_settings, build_credential(settings.auth_mode, settings.tenant_id))
+    provision_indexes(output_settings, build_credential(settings.auth_mode, settings.tenant_id))
     output_service = build_service(output_settings)
 
     texts = load_transcripts(transcripts) if transcripts else []
@@ -221,11 +208,13 @@ def dream(
 
 @app.command()
 def bench(
-    backend: str = typer.Option("local", help="Warm-arm backend: local (hermetic) or search (live Azure)"),
-    project: str = typer.Option("bench", help="Project slug when --backend search"),
+    project: str = typer.Option("bench", help="Throwaway project slug to seed and measure against"),
     out: str = typer.Option("", help="Report path (default benchmark/RESULTS.md)"),
 ) -> None:
-    """Run the token-efficiency benchmark (cold vs warm onboarding)."""
+    """Run the token-efficiency benchmark (cold vs warm onboarding).
+
+    Warm hits a live AI Search project, so this needs TACIT_SEARCH_ENDPOINT and
+    a signed-in identity. The project is emptied before and after."""
     import sys
 
     # The benchmark lives in the repo (it depends on samples/), not the
@@ -236,7 +225,7 @@ def bench(
     sys.path.insert(0, str(repo_root))
     from benchmark.bench import main as run_bench
 
-    argv = ["--backend", backend, "--project", project]
+    argv = ["--project", project]
     if out:
         argv += ["--out", out]
     run_bench(argv)
@@ -245,7 +234,7 @@ def bench(
 @app.command()
 def install(
     project: str = typer.Option("default", help="Project slug teammates should join"),
-    search_endpoint: str = typer.Option("", help="Shared AI Search endpoint (omit for local-only)"),
+    search_endpoint: str = typer.Option(..., help="Shared AI Search endpoint"),
     function_app: str = typer.Option("", help="Deployed Functions app name (remote MCP variant)"),
 ) -> None:
     """Print ready-to-paste MCP wiring for every client your team uses.
@@ -265,7 +254,7 @@ def install(
         typer.echo("# it writes the standing instructions so their agent uses memory")
         typer.echo("# without being asked. Connecting alone does nothing.\n")
         typer.echo("# Claude Code:\n")
-        typer.echo(f"    export TACIT_KEY=<key>   # then:")
+        typer.echo("    export TACIT_KEY=<key>   # then:")
         typer.echo(f"    {clients.claude_code_remote_command(function_app)}\n")
         typer.echo("# VS Code / GitHub Copilot — save as .vscode/mcp.json (prompts for the key):\n")
         typer.echo(clients.functions_http_json(function_app) + "\n")
@@ -292,7 +281,6 @@ def ui(
     port: int = typer.Option(8765, help="Port to serve on"),
     host: str = typer.Option("127.0.0.1", help="Bind address (localhost by default)"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open a browser"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     team: str = _TEAM_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
@@ -310,7 +298,7 @@ def ui(
 
     from .ui import PAGE
 
-    service = build_service(_settings(backend, project, search_endpoint, team))
+    service = build_service(_settings(project, search_endpoint, team))
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _send(self, body: bytes, content_type: str, status: int = 200) -> None:
@@ -369,14 +357,13 @@ def ui(
 
 @app.command()
 def stats(
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Is the team using it? Memories by category, contributor, and recency."""
     from collections import Counter
 
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     memories = service.list("/")
     if not memories:
         typer.echo("store is empty — nothing has been written yet")
@@ -403,12 +390,11 @@ app.add_typer(ontology_app, name="ontology")
 
 @ontology_app.command("list")
 def ontology_list(
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Show every canonical entity and the aliases teams actually type."""
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     entities = service.ontology().entities
     if not entities:
         typer.echo(
@@ -430,7 +416,6 @@ def ontology_add(
     ),
     description: str = typer.Option("", help="One line: what it is"),
     entity_id: str = typer.Option("", "--id", help="Slug (default: derived from the name)"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
@@ -440,7 +425,7 @@ def ontology_add(
     add an alias to an existing entity."""
     from .ontology import Entity, Ontology, slugify_entity
 
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     current = service.ontology()
     new = Entity(
         id=entity_id or slugify_entity(name),
@@ -459,14 +444,13 @@ def ontology_add(
 @ontology_app.command("remove")
 def ontology_remove(
     entity_id: str = typer.Argument(..., help="Entity id to drop"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Drop one entity from the vocabulary."""
     from .ontology import Ontology
 
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     current = service.ontology()
     if current.get(entity_id) is None:
         typer.echo(f"no entity {entity_id!r} in the vocabulary")
@@ -480,14 +464,13 @@ def ontology_remove(
 def ontology_import(
     file: Path = typer.Argument(..., help="JSON: {'entities':[{id,name,aliases,kind}]}"),
     replace: bool = typer.Option(False, help="Replace the vocabulary instead of merging"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Load a vocabulary file (merges by id unless --replace)."""
     from .ontology import Ontology
 
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     incoming = Ontology.from_dict(json.loads(file.read_text(encoding="utf-8")))
     if replace:
         merged = incoming.entities
@@ -503,12 +486,11 @@ def ontology_import(
 @ontology_app.command("export")
 def ontology_export(
     out: Path = typer.Option(None, help="Write here instead of stdout"),
-    backend: str = _BACKEND_OPT,
     project: str = _PROJECT_OPT,
     search_endpoint: str = _ENDPOINT_OPT,
 ) -> None:
     """Dump the vocabulary as JSON (round-trips through `ontology import`)."""
-    service = build_service(_settings(backend, project, search_endpoint))
+    service = build_service(_settings(project, search_endpoint))
     payload = json.dumps(service.ontology().to_dict(), indent=2, ensure_ascii=False)
     if out is None:
         typer.echo(payload)

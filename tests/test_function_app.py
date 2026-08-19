@@ -37,20 +37,21 @@ def test_trigger_bindings_are_mcp_tool_triggers(functions_by_name):
         json.loads(raw["toolProperties"])  # must be valid JSON property schemas
 
 
-def test_handler_roundtrip_create_then_search(functions_by_name):
-    def invoke(name: str, arguments: dict):
-        handler = functions_by_name[name].get_user_function()
-        return json.loads(handler(json.dumps({"arguments": arguments})))
+def test_handlers_parse_the_trigger_envelope(functions_by_name, monkeypatch):
+    """The app is pure transport: unwrap ``arguments``, dispatch, serialize."""
+    seen = {}
 
-    created = invoke(
-        "memory_create",
-        {"path": "/gotchas/slots.md", "content": "# Slot swap needs sentinel bump", "category": "gotcha"},
-    )
-    assert created["version"] == 1
-    hits = invoke("memory_search", {"query": "slot swap sentinel"})
-    assert hits[0]["path"] == "/gotchas/slots.md"
-    conflict = invoke(
-        "memory_update",
-        {"path": "/gotchas/slots.md", "expected_sha256": "stale", "content": "# X"},
-    )
-    assert conflict["error"] == "sha_conflict"
+    def fake_call_tool(registry, name, arguments):
+        seen["name"] = name
+        seen["arguments"] = arguments
+        return {"ok": True}
+
+    import function_app as module
+
+    monkeypatch.setattr(module, "call_tool", fake_call_tool)
+    handler = functions_by_name["memory_search"].get_user_function()
+    result = json.loads(handler(json.dumps({"arguments": {"query": "slot swap"}})))
+
+    assert result == {"ok": True}
+    assert seen["name"] == "memory_search"
+    assert seen["arguments"] == {"query": "slot swap"}

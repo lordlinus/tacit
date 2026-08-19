@@ -12,11 +12,10 @@ text, so those cancel; what differs is payload volume. The harness verifies
 each warm answer actually contains the expected fact — cheap but wrong would
 prove nothing.
 
-By default both arms run against the hermetic local backend, so the benchmark
-is reproducible with no cloud account. ``--backend search`` re-runs the warm arm
-against a live Azure AI Search project (semantic ranker + section chunks), which
-is the path a real team is on — use it to confirm the local number is not an
-artefact of the local ranker.
+The warm arm runs against a live Azure AI Search project (semantic ranker over
+section chunks) — the same path a real team is on. It needs
+``TACIT_SEARCH_ENDPOINT`` and a signed-in identity, and it seeds and empties a
+throwaway project so the measurement is not polluted by existing memories.
 
 Run: ``uv run tacit bench`` (or ``uv run python -m benchmark.bench``).
 Writes benchmark/RESULTS.md.
@@ -26,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,7 +32,6 @@ from pathlib import Path
 
 from tacit.cli import parse_memory_file
 from tacit.config import build_service, load_settings
-from tacit.local_store import LocalStore
 from tacit.service import MemoryService
 from tacit.tokens import estimate_tokens
 from tacit.tools import call_tool
@@ -109,16 +106,10 @@ def run_warm(service: MemoryService, scenario: Scenario) -> tuple[int, int, bool
 
 
 @contextmanager
-def _local_service() -> Iterator[MemoryService]:
-    with tempfile.TemporaryDirectory() as tmp:
-        yield MemoryService(LocalStore(tmp), actor="engineer-1-agent")
-
-
-@contextmanager
 def _search_service(project: str) -> Iterator[MemoryService]:
     """A live AI Search project, seeded fresh and emptied afterwards, so the
     measurement is not polluted by whatever the project already held."""
-    service = build_service(load_settings(backend="search", project=project))
+    service = build_service(load_settings(project=project))
     service.reindex()
     for memory in service.list("/"):
         service.delete(memory.path, memory.content_sha256)
@@ -129,9 +120,8 @@ def _search_service(project: str) -> Iterator[MemoryService]:
             service.delete(memory.path, memory.content_sha256)
 
 
-def run(backend: str = "local", project: str = "bench") -> tuple[list[ScenarioResult], int]:
-    context = _local_service() if backend == "local" else _search_service(project)
-    with context as service:
+def run(project: str = "bench") -> tuple[list[ScenarioResult], int]:
+    with _search_service(project) as service:
         seed_cost = seed(service)
         listing_tokens = estimate_tokens(project_listing())
         results = []
@@ -146,7 +136,7 @@ def run(backend: str = "local", project: str = "bench") -> tuple[list[ScenarioRe
         return results, seed_cost
 
 
-def render(results: list[ScenarioResult], seed_cost: int, backend: str = "local") -> str:
+def render(results: list[ScenarioResult], seed_cost: int) -> str:
     cold_total = sum(r.cold_tokens for r in results)
     warm_total = sum(r.warm_tokens for r in results)
     saving = 100.0 * (1 - warm_total / cold_total)
@@ -161,12 +151,7 @@ def render(results: list[ScenarioResult], seed_cost: int, backend: str = "local"
         "`tacit/tokens.py`, applied identically to both arms;",
         f"{TOOL_CALL_OVERHEAD} tokens/tool-call framing charged to both.",
         "",
-        f"Warm backend: **{backend}**"
-        + (
-            " — Azure AI Search, semantic ranker over section-level chunks."
-            if backend == "search"
-            else " — the hermetic local backend (reproducible without an Azure account)."
-        ),
+        "Warm backend: **Azure AI Search** — semantic ranker over section-level chunks.",
         "",
         "| question | cold (tokens / calls) | warm (tokens / calls) | saving | warm answered? | top hit |",
         "|---|---|---|---|---|---|",
@@ -212,9 +197,8 @@ def render(results: list[ScenarioResult], seed_cost: int, backend: str = "local"
         "  the question text, and the model's own answer tokens.",
         "- 'warm answered?' verifies the expected fact is literally present in",
         "  the returned memories — cheap-but-wrong would not count.",
-        "- These numbers come from the local backend's ranker. Re-run against",
-        "  Azure AI Search with `tacit bench --backend search --project <slug>`",
-        "  to confirm the saving is not an artefact of it.",
+        "- Warm hits come from the live semantic ranker, so re-runs can differ",
+        "  slightly as index statistics and the reranker change.",
         "",
     ]
     return "\n".join(lines)
@@ -222,13 +206,12 @@ def render(results: list[ScenarioResult], seed_cost: int, backend: str = "local"
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", choices=("local", "search"), default="local")
-    parser.add_argument("--project", default="bench", help="project slug for --backend search")
+    parser.add_argument("--project", default="bench", help="throwaway project slug to measure in")
     parser.add_argument("--out", default=str(RESULTS_PATH), help="report path")
     args = parser.parse_args(argv)
 
-    results, seed_cost = run(args.backend, args.project)
-    report = render(results, seed_cost, args.backend)
+    results, seed_cost = run(args.project)
+    report = render(results, seed_cost)
     Path(args.out).write_text(report, encoding="utf-8")
     print(report)
     failures = [r.scenario.id for r in results if not r.answered]

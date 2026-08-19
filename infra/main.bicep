@@ -196,7 +196,6 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
-        { name: 'TACIT_BACKEND', value: 'search' }
         { name: 'TACIT_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
         { name: 'TACIT_PROJECT', value: project }
         { name: 'TACIT_TEAM', value: team }

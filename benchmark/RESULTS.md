@@ -8,6 +8,11 @@ a **cold** agent (repo exploration) vs a **warm** agent (one
 
 Warm backend: **local** — the hermetic local backend (reproducible without an Azure account).
 
+> **Stale.** These numbers were produced by the local backend, which no longer
+> exists. Regenerate against a live service with `uv run tacit bench` (needs
+> `TACIT_SEARCH_ENDPOINT` and `az login`); the cold arm is unaffected, but the
+> warm arm now comes from the semantic ranker rather than the local TF-IDF one.
+
 | question | cold (tokens / calls) | warm (tokens / calls) | saving | warm answered? | top hit |
 |---|---|---|---|---|---|
 | dev-setup | 1,894 / 6 | 664 / 1 | 65% | yes | `/onboarding/dev-setup.md` |
@@ -45,6 +50,6 @@ and keeps paying for every engineer after:
   the question text, and the model's own answer tokens.
 - 'warm answered?' verifies the expected fact is literally present in
   the returned memories — cheap-but-wrong would not count.
-- These numbers come from the local backend's ranker. Re-run against
-  Azure AI Search with `tacit bench --backend search --project <slug>`
-  to confirm the saving is not an artefact of it.
+- These numbers come from the local backend's ranker, which has been removed.
+  Re-run with `tacit bench --project <slug>` against Azure AI Search to confirm
+  the saving is not an artefact of it.

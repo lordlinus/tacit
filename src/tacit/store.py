@@ -1,8 +1,8 @@
-"""The storage protocol both backends implement.
+"""The storage protocol the Azure AI Search backend implements.
 
 Stores are dumb: they persist and query documents. Validation, optimistic
-concurrency, tombstones, and version appending live in the service layer so
-the two backends can't drift.
+concurrency, tombstones, and version appending live in the service layer, so
+the rules hold no matter what a store does.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from .models import Memory, MemoryVersion, SearchHit, SearchScope
 
 
 class MemoryStore(Protocol):
-    #: Project this store reads and writes on behalf of. Both backends are
+    #: Project this store reads and writes on behalf of. The store is
     #: organization-wide; this is the scope every non-search operation uses.
     project: str
 

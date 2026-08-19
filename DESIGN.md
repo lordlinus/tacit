@@ -80,13 +80,11 @@ of the organization will not ask. Home-project hits get a modest boost
 (`HOME_PROJECT_BOOST`) rather than a hard sort key, so local knowledge wins ties
 but another team's clearly better answer still surfaces first.
 
-The rules live in exactly one place, `tacit/scope.py`, which emits both the
-OData filter for Azure and the in-memory predicate for the local backend.
-`tests/test_org_memory.py::TestFilterParity` evaluates the generated OData
-against the predicate over every (scope × visibility × same-project × same-team
-× routed) combination — 72 in all — because a divergence between the two would
-either hide a team's knowledge or leak a private note — and neither failure
-shows up as a failing search.
+The rules live in exactly one place, `tacit/scope.py`, which emits the OData
+filter every read path sends to Azure — search, `read`, `list`, `versions` and
+the overlap graph all derive their filter from it rather than writing their own,
+because a divergence would either hide a team's knowledge or leak a private
+note, and neither failure shows up as a failing search.
 
 **Permission is evaluated against the viewer, never the routed project.** One
 endpoint serves every repo, and the client picks which one it is asking about —
@@ -171,9 +169,8 @@ Three decisions:
   aggregates across every project, which makes it the most likely place for a
   visibility leak and the least likely place to notice one — a leak appears as
   a slightly larger count, not an error. Sharing the store method means it
-  cannot drift from what search enforces, and
-  `tests/test_graph.py::TestGraphRespectsVisibility` pins the subtle case: a
-  private memory must not make a shared entity *look* shared.
+  cannot drift from what search enforces, and pins the subtle case: a private
+  memory must not make a shared entity *look* shared.
 * **Annotation is recomputed at build time** from the current vocabulary rather
   than read from stored chunk annotations. If the two disagree the graph is
   right and the chunks are stale, which is the direction that prompts someone
@@ -185,8 +182,6 @@ configuration, and is served from the same origin as `/api/graph` so there is no
 CORS. It has no CDN reference, no framework and no build step — the force
 simulation is about forty lines of plain JavaScript over SVG — because the
 network this gets demoed in may not be able to reach a CDN at all.
-`tests/test_ui.py` enforces that self-containment, and drives the real script
-under Node when it is available.
 
 ## Invariants (inherited from PEMP)
 
@@ -211,20 +206,19 @@ under Node when it is available.
 ```
 src/tacit/
     models.py        Memory / MemoryVersion / Visibility / SearchScope
-    scope.py         the one definition of reach: OData filter + predicate
+    scope.py         the one definition of reach: the OData filter
     ontology.py      the org's shared vocabulary + deterministic matcher
     graph.py         the cross-team overlap graph (pure: memories + ontology)
     ui.py            the single-page graph UI, shipped as a module constant
     errors.py        NotFound / Duplicate / ShaConflict (structured)
     store.py         MemoryStore protocol
-    local_store.py   JSON-file backend — hermetic tests, offline dev, benchmark
-    search_store.py  Azure AI Search backend (keyless REST, same ops)
+    search_store.py  Azure AI Search backend (keyless REST)
     search_index.py  shared index schemas + provision (create-if-missing)
     service.py       validation, concurrency, tombstones, provenance stamping
     dream.py         consolidation: store + transcripts → new store
     tokens.py        token estimation (heuristic ~4 chars/token)
     config.py        TACIT_* settings (pydantic-settings)
-    mcp_stdio.py     local stdio MCP server over either backend
+    mcp_stdio.py     stdio MCP server (per-engineer Entra identity)
     cli.py           typer: provision / ontology / seed / search / dream / bench
 functions/           Azure Functions app — MCP tool trigger per memory tool
 infra/               bicep + azd: AI Search + Flex Consumption Functions + RBAC
@@ -310,10 +304,10 @@ already stored.
 **Semantic ranking, with a fallback.** Queries use `queryType: semantic` with
 extractive captions, so a plain-language question outranks keyword overlap. A
 scoring profile (title ×3, tags ×2, plus freshness) shapes the BM25 candidate
-set, aligning Azure's ordering with the local backend's. If a service tier
-declines semantic search, the store downgrades to BM25 permanently for that
-process rather than failing the query — and the scoring profile, which the L2
-reranker would otherwise never see, is applied on that path.
+set. If a service tier declines semantic search, the store downgrades to BM25
+permanently for that process rather than failing the query — and the scoring
+profile, which the L2 reranker would otherwise never see, is applied on that
+path.
 
 **Results are over-fetched, then thinned.** Only the best section of each memory
 is returned, and home-project hits are boosted after the service ranks. Both

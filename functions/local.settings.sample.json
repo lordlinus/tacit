@@ -3,7 +3,6 @@
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "TACIT_BACKEND": "search",
     "TACIT_SEARCH_ENDPOINT": "https://<your-search>.search.windows.net",
     "TACIT_PROJECT": "contoso-payments",
     "TACIT_AUTH_MODE": "azure-cli"

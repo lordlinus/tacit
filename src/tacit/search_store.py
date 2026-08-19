@@ -1,4 +1,4 @@
-"""Azure AI Search backend — same MemoryStore protocol as LocalStore.
+"""Azure AI Search backend implementing the MemoryStore protocol.
 
 Every project in the organization shares one index set. Latest state is
 mergeOrUpload-ed into ``tacit-memories`` (key = project + path slug); every

@@ -21,14 +21,15 @@ WIRING = Wiring(
 def test_claude_code_one_liner():
     command = claude_code_command(WIRING)
     assert command.startswith("claude mcp add tacit ")
-    assert "--env TACIT_BACKEND=search" in command
     assert "--env TACIT_SEARCH_ENDPOINT=https://srch-x.search.windows.net" in command
     assert command.endswith("-- uv --directory /opt/tacit run tacit-mcp")
 
 
-def test_local_wiring_has_no_endpoint():
-    wiring = Wiring(repo_dir="/opt/tacit")
-    assert wiring.env == {"TACIT_BACKEND": "local", "TACIT_PROJECT": "default"}
+def test_wiring_always_carries_the_shared_endpoint():
+    assert WIRING.env == {
+        "TACIT_SEARCH_ENDPOINT": "https://srch-x.search.windows.net",
+        "TACIT_PROJECT": "contoso-payments",
+    }
 
 
 def test_vscode_and_copilot_json_shapes():

@@ -19,15 +19,12 @@ class Wiring:
     """Everything needed to point a stdio MCP client at the shared store."""
 
     repo_dir: str
-    search_endpoint: str = ""
+    search_endpoint: str
     project: str = "default"
 
     @property
     def env(self) -> dict[str, str]:
-        if not self.search_endpoint:
-            return {"TACIT_BACKEND": "local", "TACIT_PROJECT": self.project}
         return {
-            "TACIT_BACKEND": "search",
             "TACIT_SEARCH_ENDPOINT": self.search_endpoint,
             "TACIT_PROJECT": self.project,
         }

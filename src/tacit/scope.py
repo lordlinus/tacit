@@ -1,11 +1,10 @@
-"""Search scope: how wide a query reaches, expressed once for both backends.
+"""Search scope: how wide a query reaches.
 
 Cross-team retrieval only works if "who may see what" has exactly one
-definition. The OData filter sent to Azure AI Search and the predicate the
-local backend applies in memory are generated from the same rules here, and
-``tests/test_org_memory.py::TestFilterParity`` asserts the two agree — a drift
-between them would either hide a team's knowledge or leak a private note, and
-neither failure is visible from a passing search.
+definition. Every OData filter sent to Azure AI Search is generated here, so
+reads, lists, searches and the overlap graph cannot drift apart — a drift
+would either hide a team's knowledge or leak a private note, and neither
+failure is visible from a passing search.
 
 Two independent things decide what a query returns:
 
@@ -100,26 +99,6 @@ def scope_filter(
     if not shape:
         return f"({permission})"
     return f"({shape}) and ({permission})"
-
-
-def _shape_permits(memory: Memory, scope: SearchScope, target_project: str) -> bool:
-    if scope is SearchScope.PROJECT:
-        return memory.project == target_project
-    if scope is SearchScope.ORG:
-        return memory.project != target_project
-    return True
-
-
-def permits(
-    memory: Memory,
-    scope: SearchScope,
-    project: str,
-    team: str = "",
-    viewer: "Viewer | None" = None,
-) -> bool:
-    """In-memory twin of :func:`scope_filter`, for the local backend."""
-    resolved = viewer or Viewer(project=project, team=team)
-    return _shape_permits(memory, scope, project) and resolved.sees(memory)
 
 
 def parse_scope(value: "str | SearchScope | None") -> SearchScope:

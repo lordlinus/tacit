@@ -23,12 +23,12 @@ FUNCTIONS_DIR = str(Path(__file__).resolve().parents[1] / "functions")
 @pytest.fixture(scope="session")
 def function_app(tmp_path_factory):
     """The imported Functions app module, registered exactly once."""
-    root = tmp_path_factory.mktemp("function-app-store")
-    # The app builds its service from env on first call; point it at a local
-    # store so importing it can never reach for Azure.
-    previous = {k: os.environ.get(k) for k in ("TACIT_BACKEND", "TACIT_LOCAL_ROOT")}
-    os.environ["TACIT_BACKEND"] = "local"
-    os.environ["TACIT_LOCAL_ROOT"] = str(root)
+    # The app builds its service from env on first call. These tests only
+    # inspect trigger registration, so a syntactically valid endpoint is enough
+    # — nothing here ever issues a request.
+    previous = {k: os.environ.get(k) for k in ("TACIT_SEARCH_ENDPOINT", "TACIT_PROJECT")}
+    os.environ["TACIT_SEARCH_ENDPOINT"] = "https://srch-test.search.windows.net"
+    os.environ["TACIT_PROJECT"] = "test"
     added = FUNCTIONS_DIR not in sys.path
     if added:
         sys.path.insert(0, FUNCTIONS_DIR)

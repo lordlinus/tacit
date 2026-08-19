@@ -55,7 +55,6 @@ def _doc(content: str, captions: list[str] | None = None) -> dict:
 def store(monkeypatch):
     monkeypatch.setattr("tacit.search_store.build_credential", lambda *a, **k: object())
     settings = Settings(
-        backend="search",
         project="demo",
         team="platform",
         search_endpoint="https://srch-x.search.windows.net",

@@ -30,10 +30,6 @@ class Settings(BaseSettings):
     # because knowledge that cannot leave its team is not organizational memory.
     default_visibility: str = Field(default="org")
 
-    # "local" (JSON files under local_root) or "search" (Azure AI Search).
-    backend: str = Field(default="local")
-    local_root: str = Field(default=".tacit")
-
     # Who mutations are attributed to (defaults to the OS user at runtime).
     actor: str = Field(default="")
 
@@ -70,37 +66,21 @@ def load_settings(**overrides: str) -> Settings:
 
 
 def build_service(settings: Settings, viewer=None):
-    """Wire a MemoryService onto the configured backend.
+    """Wire a MemoryService onto the shared Azure AI Search index set.
 
-    Both backends are organization-wide stores that this service writes into
-    on behalf of one project, so the project is passed to the service rather
-    than baked into a store name or directory. ``viewer`` overrides who
-    permission is evaluated against; the registry supplies the server's own
-    identity so a routed project cannot escalate.
+    The store is organization-wide and this service writes into it on behalf of
+    one project, so the project is passed to the service rather than baked into
+    an index name. ``viewer`` overrides who permission is evaluated against; the
+    registry supplies the server's own identity so a routed project cannot
+    escalate.
     """
     from .models import Visibility
+    from .search_store import SearchStore
     from .service import MemoryService
 
     resolved_viewer = viewer or settings.viewer()
-    if settings.backend == "search":
-        from .search_store import SearchStore
-
-        settings.require("search_endpoint")
-        store = SearchStore(settings, viewer=resolved_viewer)
-    else:
-        from pathlib import Path
-
-        from .local_store import LocalStore
-
-        # One root for every project, mirroring the shared index set — so the
-        # local backend can answer cross-project searches too and the hermetic
-        # tests exercise the same behaviour as Azure.
-        store = LocalStore(
-            Path(settings.local_root),
-            project=settings.project,
-            team=settings.team,
-            viewer=resolved_viewer,
-        )
+    settings.require("search_endpoint")
+    store = SearchStore(settings, viewer=resolved_viewer)
     return MemoryService(
         store,
         actor=settings.actor,

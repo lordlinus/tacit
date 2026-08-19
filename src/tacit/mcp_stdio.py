@@ -1,9 +1,10 @@
 """Local stdio MCP server over the shared tool surface.
 
-Keyless wiring for local dev and for teams not yet on the Functions endpoint:
-the agent spawns ``tacit-mcp`` (stdio — every MCP client speaks it);
-against the `search` backend, DefaultAzureCredential mints tokens at runtime,
-so no secrets ever land in agent config (same pattern as `foundry-iq mcp`).
+Keyless wiring for engineers working from a clone: the agent spawns
+``tacit-mcp`` (stdio — every MCP client speaks it) and DefaultAzureCredential
+mints AI Search tokens at runtime, so no secrets ever land in agent config
+(same pattern as `foundry-iq mcp`). Each engineer therefore reads and writes
+under their own Entra identity, which the shared Functions endpoint cannot do.
 
 Project routing: the default store is inferred from the working directory
 (git repo folder name) when TACIT_PROJECT isn't set — MCP clients spawn stdio
