@@ -208,9 +208,15 @@ uv run tacit ui             # or /api/ui on the deployed Function App
 
 Entities sit in the middle, the projects that wrote about them around the
 outside, and an entity known to **more than one team turns orange** — that is
-knowledge somebody is about to rediscover the hard way. The graph is built from
-the same visibility rules search uses, so it is per-viewer: a private memory
-contributes no node, no edge, and no count.
+knowledge somebody is about to rediscover the hard way. Click a node to see the
+memories behind it. The graph is built from the same visibility rules search
+uses, so it is per-viewer: a private memory contributes no node, no edge, and no
+count.
+
+The page also carries a **search box over the same `memory_search` tool an agent
+calls** — same scope, project, category and entity filters, same ranked sections,
+same "from *other-team*" badge when a hit crosses a boundary. It is the fastest
+way to see what your agents will actually get back.
 
 ## Wire up your team
 

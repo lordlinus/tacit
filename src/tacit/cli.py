@@ -313,6 +313,24 @@ def ui(
 
     service = build_service(_settings(project, search_endpoint, team))
 
+    def _search(params: dict) -> list:
+        from .tools import call_tool
+
+        query = (params.get("q") or "").strip()
+        if not query:
+            return []
+        try:
+            top = max(1, min(int(params.get("top", 8)), 25))
+        except ValueError:
+            top = 8
+        return call_tool(service, "memory_search", {
+            "query": query,
+            "top": top,
+            "scope": params.get("scope") or "",
+            "category": params.get("category") or "",
+            "entity": params.get("entity") or "",
+        })
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def _send(self, body: bytes, content_type: str, status: int = 200) -> None:
             self.send_response(status)
@@ -323,20 +341,34 @@ def ui(
             self.wfile.write(body)
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib naming
-            route = self.path.split("?", 1)[0].rstrip("/") or "/"
+            from urllib.parse import parse_qs, urlsplit
+
+            split = urlsplit(self.path)
+            route = split.path.rstrip("/") or "/"
+            params = {k: v[0] for k, v in parse_qs(split.query).items()}
             if route in ("/", "/ui"):
                 self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif route in ("/graph", "/ui/graph"):
-                try:
-                    payload = _json.dumps(service.graph(), ensure_ascii=False, default=str)
-                    self._send(payload.encode("utf-8"), "application/json")
-                except Exception as exc:  # noqa: BLE001 - surfaced to the page
-                    self._send(
-                        _json.dumps({"error": str(exc)}).encode("utf-8"),
-                        "application/json", 500,
-                    )
+                self._json_or_error(
+                    lambda: service.graph(params.get("scope") or None)
+                )
+            elif route in ("/search", "/ui/search"):
+                # Through call_tool, so the page sees exactly the hit shape an
+                # agent does rather than a second, drifting serialization.
+                self._json_or_error(lambda: _search(params))
             else:
                 self._send(b"not found", "text/plain", 404)
+
+        def _json_or_error(self, produce) -> None:
+            try:
+                payload = _json.dumps(produce(), ensure_ascii=False, default=str)
+            except Exception as exc:  # noqa: BLE001 - surfaced to the page
+                self._send(
+                    _json.dumps({"error": str(exc)}).encode("utf-8"),
+                    "application/json", 500,
+                )
+                return
+            self._send(payload.encode("utf-8"), "application/json")
 
         def log_message(self, *args) -> None:
             return  # keep the terminal readable during a demo

@@ -179,9 +179,18 @@ Three decisions:
 The page (`ui.py`) is a module constant rather than a static asset: it vendors
 into the Functions app with the rest of the package, needs no package-data
 configuration, and is served from the same origin as `/api/graph` so there is no
-CORS. It has no CDN reference, no framework and no build step — the force
-simulation is about forty lines of plain JavaScript over SVG — because the
-network this gets demoed in may not be able to reach a CDN at all.
+CORS. The force layout is D3, loaded from a pinned CDN — a deliberate reversal
+of the original "no CDN" rule, which existed so the page would render on an
+air-gapped network. The trade was accepted for the layout quality; the CSP
+admits exactly that one host, and the page says so plainly if the fetch fails
+rather than showing an empty canvas.
+
+The same page also serves the **search box**, which goes through `call_tool` to
+`memory_search` rather than the service directly. That is the point: what an
+operator sees in the browser is the same ranked set an agent sees, including
+the rule that a `project` field appears only when the hit crossed a team
+boundary. A second serialization would be free to drift from the tool contract,
+and the drift would be invisible.
 
 ## Invariants (inherited from PEMP)
 

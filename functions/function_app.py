@@ -160,12 +160,13 @@ def ui(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(
         PAGE,
         mimetype="text/html",
-        # The page is generated from a package constant and embeds no data, but
-        # it is still served with a restrictive CSP: the only script is inline
-        # and there is nothing to fetch from anywhere but this origin.
+        # The page embeds no data, so the policy stays tight: its own inline
+        # script, its own origin for data, and the pinned D3 CDN — which is the
+        # single external dependency the graph needs.
         headers={
             "Content-Security-Policy":
-                "default-src 'none'; script-src 'unsafe-inline'; "
+                "default-src 'none'; "
+                "script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "style-src 'unsafe-inline'; connect-src 'self'; img-src data:",
             "X-Content-Type-Options": "nosniff",
         },
@@ -195,3 +196,40 @@ def graph(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.function_name(name="search")
+@app.route(route="search", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+def search(req: func.HttpRequest) -> func.HttpResponse:
+    """The UI's search box, over the same tool an agent calls.
+
+    Dispatching through ``call_tool`` rather than the service keeps one
+    definition of what a hit looks like, so the page cannot drift from what
+    `memory_search` returns — including the rule that a `project` field appears
+    only when the result crossed a team boundary.
+    """
+    args = {
+        "query": req.params.get("q", ""),
+        "top": _int_param(req.params.get("top"), default=8, maximum=25),
+        "scope": req.params.get("scope") or "",
+        "category": req.params.get("category") or "",
+        "entity": req.params.get("entity") or "",
+        "project": req.params.get("project") or "",
+    }
+    if not args["query"].strip():
+        return func.HttpResponse("[]", mimetype="application/json")
+    result = call_tool(get_registry(), "memory_search", args)
+    status = 400 if isinstance(result, dict) and result.get("error") else 200
+    return func.HttpResponse(
+        json.dumps(result, ensure_ascii=False, default=str),
+        status_code=status,
+        mimetype="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _int_param(raw: str | None, *, default: int, maximum: int) -> int:
+    try:
+        return max(1, min(int(raw), maximum))
+    except (TypeError, ValueError):
+        return default
