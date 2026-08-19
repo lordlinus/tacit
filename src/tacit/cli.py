@@ -40,6 +40,17 @@ def provision(
     settings = _settings(project=project, search_endpoint=search_endpoint)
     credential = build_credential(settings.auth_mode, settings.tenant_id)
     typer.echo("provisioned indexes: " + ", ".join(provision_indexes(settings, credential)))
+    if settings.vectors_enabled:
+        typer.echo(
+            f"hybrid retrieval ON: {settings.embedding_deployment} "
+            f"({settings.embedding_dimensions}d) — run `tacit reindex` to embed "
+            "memories stored before now"
+        )
+    else:
+        typer.echo(
+            "hybrid retrieval OFF (keyword + semantic only) — set "
+            "TACIT_EMBEDDING_ENDPOINT to add vector search"
+        )
 
 
 @app.command()
@@ -49,13 +60,15 @@ def reindex(
 ) -> None:
     """Rebuild the chunks index from the memories index.
 
-    Run this after changing the shared vocabulary: entity annotations are
-    written onto chunks, so memories stored earlier keep their old ones until
-    re-projected. Re-running is harmless — chunk keys are derived from project +
-    path + section slug, so it converges."""
+    Run this after changing the shared vocabulary, or after turning on an
+    embedding deployment: entity annotations and vectors are both written onto
+    chunks, so memories stored earlier keep their old ones until re-projected.
+    Re-running is harmless — chunk keys are derived from project + path +
+    section slug, so it converges."""
     settings = _settings(project=project, search_endpoint=search_endpoint)
     count = build_service(settings).reindex()
-    typer.echo(f"reindexed {count} memories")
+    mode = "with embeddings" if settings.vectors_enabled else "text only"
+    typer.echo(f"reindexed {count} memories ({mode})")
 
 
 @app.command()

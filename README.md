@@ -42,7 +42,7 @@ flowchart TB
 
     subgraph idx["Azure AI Search — ONE index set per organization"]
         M["tacit-memories<br/>system of record, 1 doc per (project, path)"]
-        C["tacit-chunks<br/>the index queries run against, 1 doc per section"]
+        C["tacit-chunks<br/>the index queries run against, 1 doc per section<br/>text + optional vector"]
         V["tacit-versions<br/>append-only audit trail"]
         O["tacit-ontology<br/>shared vocabulary"]
     end
@@ -68,6 +68,42 @@ of it, one document per `##` section, and is what searches actually run against,
 which is why a hit costs the matching section rather than the whole file. Delete
 a memory and its chunks go with it, so tombstoned content can never surface.
 
+### Retrieval
+
+A search is one request that ranks three ways at once:
+
+| Layer | What it catches |
+| ----- | --------------- |
+| **BM25** over title, tags, headings, body, and entity aliases | the exact words |
+| **Vector** over the section embedding *(optional)* | the meaning, when nobody used the same words |
+| **Semantic ranker** (L2 + extractive captions) | which of the candidates actually answers the question |
+
+Keyword and vector candidates are fused by Azure's RRF, then the semantic ranker
+orders what survives — the combination Microsoft documents as the strongest for
+relevance. Each layer degrades on its own: a tier without semantic falls back to
+BM25, an index without vectors drops that half of the query, and both keep
+answering.
+
+Vectors are **off until you configure an embedding deployment**, because a
+memory store you can't stand up without a second Azure resource is harder to
+adopt than one that gets better when you add it:
+
+```bash
+export TACIT_EMBEDDING_ENDPOINT=https://<aoai>.openai.azure.com
+uv run tacit provision      # adds content_vector + a query-time vectorizer
+uv run tacit reindex        # embed what was already stored
+```
+
+Queries use **integrated vectorization**: the question travels to Azure as plain
+text and the search service embeds it, so the agent's path is one hop shorter
+and only the search service needs access to the model. Writes are different —
+memories are *pushed*, not crawled by an indexer, so section vectors are always
+computed by whoever is writing. Set `TACIT_USE_VECTORIZER=false` to embed
+queries locally instead.
+
+Adding a field is one of the schema changes Azure applies without a rebuild, so
+turning vectors on later costs a reindex, not a migration.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -79,13 +115,13 @@ sequenceDiagram
     Note over A,M: READ — two or three hits instead of repo excavation
     A->>S: memory_search — why does the webhook signature fail in staging
     S->>S: scope x visibility x viewer, resolved to one OData filter
-    S->>C: semantic query, with a bias toward the home project
+    S->>C: keyword + vector, fused by RRF, then semantically reranked
     C-->>A: matching sections — a project field means another team wrote it
 
     Note over A,M: WRITE — provenance is server-stamped, never caller-supplied
     A->>S: memory_create(path, content)
     S->>M: upsert doc, then append an immutable version row
-    S->>C: replace this memory's sections, annotated from the vocabulary
+    S->>C: replace this memory's sections, annotated and embedded
 ```
 
 ## Quick start
@@ -214,11 +250,30 @@ every repo.
 | `TACIT_TEAM`               | Owning team — resolves `visibility: team`             |
 | `TACIT_DEFAULT_VISIBILITY` | Visibility for new memories (default `org`)           |
 | `TACIT_AUTH_MODE`          | `default-credential` (default) or `azure-cli`         |
+| `TACIT_EMBEDDING_ENDPOINT` | Azure OpenAI endpoint — set it to enable hybrid search |
+| `TACIT_EMBEDDING_DEPLOYMENT` | Embedding deployment (default `text-embedding-3-small`) |
+| `TACIT_EMBEDDING_MODEL`    | Model behind that deployment, for the vectorizer       |
+| `TACIT_EMBEDDING_DIMENSIONS` | Vector size (default `1536`)                        |
+| `TACIT_USE_VECTORIZER`     | Let Search embed queries (default `true`)             |
 
 ## Deploy
 
 ```bash
 azd up      # AI Search + Flex Consumption Functions + RBAC, keyless
+```
+
+`azd up` also deploys an Azure OpenAI embedding deployment and grants both the
+Functions identity and you access to it, so hybrid search is on by default. Pass
+`embeddingModel=""` to skip that resource and run keyword + semantic only.
+
+To reuse an embedding model you already have, pass its endpoint instead — the
+template then creates no Azure OpenAI account, and you grant **Cognitive Services
+OpenAI User** on your resource to the two principals it outputs
+(`FUNCTION_APP_PRINCIPAL_ID` writes vectors, `SEARCH_PRINCIPAL_ID` embeds
+queries):
+
+```bash
+azd env set EMBEDDING_ENDPOINT https://<existing>.openai.azure.com
 ```
 
 Teammates who don't want a clone point their MCP client straight at

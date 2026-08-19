@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     # Who mutations are attributed to (defaults to the OS user at runtime).
     actor: str = Field(default="")
 
+    # Azure OpenAI embedding deployment powering the vector half of hybrid
+    # search. Optional: leave the endpoint unset and retrieval stays BM25 +
+    # semantic reranking, exactly as before.
+    embedding_endpoint: str = Field(default="")
+    embedding_deployment: str = Field(default="text-embedding-3-small")
+    #: The model behind that deployment. Usually the same string, but the
+    #: vectorizer needs the model name specifically, and deployments are often
+    #: named for their purpose rather than their model.
+    embedding_model: str = Field(default="text-embedding-3-small")
+    embedding_dimensions: int = Field(default=1536)
+
     # Auth: "default-credential" (keyless) or "azure-cli".
     auth_mode: str = Field(default="default-credential")
     tenant_id: str = Field(default="")
@@ -42,6 +53,24 @@ class Settings(BaseSettings):
         from .scope import Viewer
 
         return Viewer(project=self.project, team=self.team)
+
+    @property
+    def vectors_enabled(self) -> bool:
+        return bool(self.embedding_endpoint and self.embedding_deployment)
+
+    def embedder(self, credential=None):
+        """The embedding client, or None when vectors are not configured."""
+        if not self.vectors_enabled:
+            return None
+        from .azure_common import build_credential
+        from .embeddings import Embedder
+
+        return Embedder(
+            self.embedding_endpoint,
+            self.embedding_deployment,
+            credential or build_credential(self.auth_mode, self.tenant_id),
+            dimensions=self.embedding_dimensions,
+        )
 
     def require(self, *names: str) -> None:
         missing = [n for n in names if not getattr(self, n, "")]

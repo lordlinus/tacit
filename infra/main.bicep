@@ -35,6 +35,23 @@ apart. Per-engineer attribution requires the stdio variant, where each person
 sets TACIT_TEAM themselves.''')
 param team string = ''
 
+@description('''Endpoint of an EXISTING Azure OpenAI or Foundry resource that
+already has an embedding model deployed. Set this to reuse what you have; the
+template then creates no Azure OpenAI account, and you grant `Cognitive Services
+OpenAI User` on that resource to the Function App identity and to the search
+service identity yourself (both object ids are template outputs).''')
+param embeddingEndpoint string = ''
+
+@description('''Embedding model deployed for hybrid (keyword + vector) search.
+Set to an empty string, with no embeddingEndpoint, to skip embeddings entirely:
+retrieval then falls back to BM25 + semantic reranking, which needs no second
+resource and no per-call cost. Turning it on later is a redeploy plus
+`tacit reindex`.''')
+param embeddingModel string = 'text-embedding-3-small'
+
+@description('Embedding dimensions. text-embedding-3-* support truncation; 1536 is the accuracy/size knee.')
+param embeddingDimensions int = 1536
+
 @description('Object id of the developer running azd, granted search data access for seeding/provisioning.')
 param deployerPrincipalId string = ''
 
@@ -50,6 +67,11 @@ var searchName = 'srch-${environmentName}-${suffix}'
 var funcName = 'func-${environmentName}-${suffix}'
 var planName = 'plan-${environmentName}-${suffix}'
 var storageName = toLower(replace('st${environmentName}${suffix}', '-', ''))
+var openAiName = 'aoai-${environmentName}-${suffix}'
+var createOpenAi = empty(embeddingEndpoint) && !empty(embeddingModel)
+var resolvedEmbeddingEndpoint = !empty(embeddingEndpoint)
+  ? embeddingEndpoint
+  : (createOpenAi ? openAi!.properties.endpoint : '')
 
 // Search Service Contributor (manage indexes) + Search Index Data Contributor (read/write docs)
 var roleSearchServiceContributor = subscriptionResourceId(
@@ -63,11 +85,17 @@ var roleStorageQueueDataContributor = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
 var roleStorageQueueMessageProcessor = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', '8a0f0c08-91a1-4084-bc3d-661d67233fed')
+// Cognitive Services OpenAI User: call the embedding deployment, nothing else.
+var roleCognitiveServicesOpenAIUser = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
 
 resource search 'Microsoft.Search/searchServices@2026-03-01-preview' = {
   name: searchName
   location: location
   sku: { name: searchSku }
+  // The query-time vectorizer calls the embedding model as the search service
+  // itself, so the service needs an identity even though nothing else here does.
+  identity: { type: 'SystemAssigned' }
   // Fully keyless: disableLocalAuth rejects api-keys outright - Entra RBAC is
   // the only way in (mutually exclusive with authOptions, so none is set).
   // Serverless manages capacity itself - replica/partition counts must be omitted.
@@ -81,6 +109,30 @@ resource search 'Microsoft.Search/searchServices@2026-03-01-preview' = {
         partitionCount: 1
         semanticSearch: searchSku == 'free' ? 'disabled' : 'free'
       }
+}
+
+// Embeddings for the vector half of hybrid search. Keyless like the rest:
+// local auth is disabled, so the Functions MI and the developer reach it only
+// through Entra RBAC.
+resource openAi 'Microsoft.CognitiveServices/accounts@2024-10-01' = if (createOpenAi) {
+  name: openAiName
+  location: location
+  kind: 'OpenAI'
+  sku: { name: 'S0' }
+  properties: {
+    customSubDomainName: openAiName
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource embedding 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = if (createOpenAi) {
+  parent: openAi
+  name: embeddingModel
+  sku: { name: 'Standard', capacity: 50 }
+  properties: {
+    model: { format: 'OpenAI', name: embeddingModel, version: '1' }
+  }
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -199,6 +251,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'TACIT_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
         { name: 'TACIT_PROJECT', value: project }
         { name: 'TACIT_TEAM', value: team }
+        { name: 'TACIT_EMBEDDING_ENDPOINT', value: resolvedEmbeddingEndpoint }
+        { name: 'TACIT_EMBEDDING_DEPLOYMENT', value: embeddingModel }
+        { name: 'TACIT_EMBEDDING_MODEL', value: embeddingModel }
+        { name: 'TACIT_EMBEDDING_DIMENSIONS', value: string(embeddingDimensions) }
       ]
     }
   }
@@ -256,6 +312,37 @@ resource funcStorageQueueMessages 'Microsoft.Authorization/roleAssignments@2022-
 }
 
 // The developer seeding/provisioning from their machine (az login identity).
+resource funcOpenAi 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createOpenAi) {
+  name: guid(openAi.id, functionApp.id, 'openai-user')
+  scope: openAi
+  properties: {
+    roleDefinitionId: roleCognitiveServicesOpenAIUser
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The search service embeds queries itself (integrated vectorization).
+resource searchOpenAi 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createOpenAi) {
+  name: guid(openAi.id, search.id, 'openai-user')
+  scope: openAi
+  properties: {
+    roleDefinitionId: roleCognitiveServicesOpenAIUser
+    principalId: search.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// `tacit seed` and `tacit reindex` embed from the developer's machine.
+resource deployerOpenAi 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createOpenAi && !empty(deployerPrincipalId)) {
+  name: guid(openAi.id, deployerPrincipalId, 'openai-user')
+  scope: openAi
+  properties: {
+    roleDefinitionId: roleCognitiveServicesOpenAIUser
+    principalId: deployerPrincipalId
+  }
+}
+
 resource deployerSearchData 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
   name: guid(search.id, deployerPrincipalId, 'search-data')
   scope: search
@@ -287,5 +374,11 @@ resource deployerStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01
 
 output SEARCH_ENDPOINT string = 'https://${search.name}.search.windows.net'
 output FUNCTION_APP_NAME string = functionApp.name
+output TACIT_EMBEDDING_ENDPOINT string = resolvedEmbeddingEndpoint
+output TACIT_EMBEDDING_DEPLOYMENT string = embeddingModel
+// Grant these Cognitive Services OpenAI User on your resource when you supply
+// an existing embeddingEndpoint; the template cannot assign roles outside it.
+output FUNCTION_APP_PRINCIPAL_ID string = functionApp.identity.principalId
+output SEARCH_PRINCIPAL_ID string = search.identity.principalId
 // Streamable HTTP transport (SSE at /runtime/webhooks/mcp/sse is deprecated).
 output MCP_ENDPOINT string = 'https://${functionApp.properties.defaultHostName}/runtime/webhooks/mcp'

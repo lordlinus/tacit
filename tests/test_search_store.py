@@ -10,8 +10,19 @@ import pytest
 
 from tacit.config import Settings
 from tacit.models import Memory, MemoryStatus, MemoryVersion, SearchScope, Visibility, utcnow
-from tacit.search_index import SCORING_PROFILE, SEMANTIC_CONFIG, index_names
-from tacit.search_store import SearchStore, _extract_from, odata_quote
+from tacit.search_index import (
+    SEMANTIC_CONFIG,
+    VECTOR_FIELD,
+    VECTOR_PROFILE,
+    _chunks_schema,
+    index_names,
+)
+from tacit.search_store import (
+    SEMANTIC_RERANK_WINDOW,
+    SearchStore,
+    _extract_from,
+    odata_quote,
+)
 
 
 class FakeSearch:
@@ -186,27 +197,147 @@ def test_search_queries_chunks_with_semantic_and_projection(store):
     assert "scoringProfile" not in body, "the L2 reranker never sees BM25 scoring-profile order"
 
 
-def test_semantic_rejection_falls_back_to_bm25_and_stays_down(store):
-    store.fake.errors["semantic"] = RuntimeError(
-        "HTTP 400: Semantic search is not enabled for this service"
-    )
-    hits = store.search("refund backlog")
-    assert hits == []
-    bodies = store.fake.bodies("/docs/search.post.search")
-    assert bodies[0]["queryType"] == "semantic"
-    assert "queryType" not in bodies[-1]
-    assert bodies[-1]["scoringProfile"] == SCORING_PROFILE
-    assert store._semantic_ok is False
-
-    store.fake.calls.clear()
-    store.search("second query")
-    assert all("queryType" not in b for b in store.fake.bodies("/docs/search.post.search"))
+def test_a_failure_is_surfaced_rather_than_silently_downgraded(store):
+    """provision creates the semantic config and vector profile, so a rejection
+    means the index is wrong — say so instead of quietly halving recall."""
+    store.fake.errors["search"] = RuntimeError("HTTP 503: service unavailable")
+    with pytest.raises(RuntimeError, match="503"):
+        store.search("anything")
 
 
 def test_a_real_failure_is_not_swallowed_as_a_semantic_downgrade(store):
     store.fake.errors["search"] = RuntimeError("HTTP 503: service unavailable")
     with pytest.raises(RuntimeError, match="503"):
         store.search("anything")
+
+
+class FakeEmbedder:
+    """Deterministic vectors, and a record of what was asked to be embedded."""
+
+    dimensions = 4
+
+    def __init__(self, fail: bool = False):
+        self.inputs: list[str] = []
+        self.fail = fail
+
+    def embed(self, texts):
+        if self.fail:
+            raise RuntimeError("embedding deployment unreachable")
+        self.inputs.extend(texts)
+        return [[float(len(t)), 0.1, 0.2, 0.3] for t in texts]
+
+
+def _chunk_index_actions(store) -> list[dict]:
+    calls = [
+        b for i, s, b in store.fake.calls
+        if i == "tacit-chunks" and s == "/docs/search.index"
+    ]
+    return calls[0]["value"]
+
+
+def _vector_settings(**overrides):
+    return Settings(
+        project="demo",
+        team="platform",
+        search_endpoint="https://srch-x.search.windows.net",
+        embedding_endpoint="https://aoai-x.openai.azure.com",
+        **overrides,
+    )
+
+
+def _wire(store):
+    fake = FakeSearch()
+    store._post = fake  # type: ignore[method-assign]
+    store.fake = fake  # type: ignore[attr-defined]
+    return store
+
+
+@pytest.fixture
+def vector_store(monkeypatch):
+    """Hybrid: the service embeds the query, the writer embeds the sections."""
+    monkeypatch.setattr("tacit.search_store.build_credential", lambda *a, **k: object())
+    return _wire(
+        SearchStore(_vector_settings(), credential=object(), embedder=FakeEmbedder())
+    )
+
+
+class TestHybridRetrieval:
+    """Vectors are additive: on, they ride along with the text query; off or
+    rejected, everything behaves exactly as it did before."""
+
+    def test_vectors_are_off_unless_an_embedding_endpoint_is_configured(self, store):
+        store.search("refund backlog")
+        assert "vectorQueries" not in store.fake.bodies("/docs/search.post.search")[-1]
+
+    def test_search_sends_both_halves_of_a_hybrid_query(self, vector_store):
+        vector_store.search("refund backlog", top=2)
+        body = vector_store.fake.bodies("/docs/search.post.search")[-1]
+        assert body["search"] == "refund backlog", "the keyword half must survive"
+        vector_query = body["vectorQueries"][0]
+        assert vector_query["fields"] == VECTOR_FIELD
+        # RRF hands at most 50 rows to the reranker; a smaller k starves it.
+        assert vector_query["k"] == SEMANTIC_RERANK_WINDOW
+        assert body["queryType"] == "semantic", "hybrid is still semantically reranked"
+
+    def test_a_vectorizer_keeps_the_embedding_call_off_the_agents_path(self, vector_store):
+        vector_store.search("refund backlog")
+        vector_query = vector_store.fake.bodies("/docs/search.post.search")[-1]["vectorQueries"][0]
+        assert vector_query["kind"] == "text"
+        assert vector_query["text"] == "refund backlog"
+        assert vector_store._embedder.inputs == [], "the service embeds, not us"
+
+    def test_writes_always_embed_locally_even_with_a_vectorizer(self, vector_store):
+        """A vectorizer is query-time only; documents are pushed, not crawled,
+        so section vectors can only come from here."""
+        vector_store.put(_memory("# Oncall\n\nlead"), _version())
+        uploads = [
+            a for a in _chunk_index_actions(vector_store)
+            if a["@search.action"] == "mergeOrUpload"
+        ]
+        assert uploads and all(len(a[VECTOR_FIELD]) == 4 for a in uploads)
+        assert vector_store._embedder.inputs, "the write path embedded"
+
+    def test_sections_are_embedded_with_their_memory_title(self, vector_store):
+        """Sections are retrieved alone, so '## Draining' needs its title to
+        carry what it is about."""
+        vector_store.put(
+            _memory("# Oncall\n\nlead\n\n## Draining\n\nStop the upstream."), _version()
+        )
+        embedded = vector_store._embedder.inputs
+        assert len(embedded) == 2
+        assert all(text.startswith("Oncall") for text in embedded)
+        assert any("Stop the upstream." in text for text in embedded)
+
+    def test_every_chunk_carries_a_vector(self, vector_store):
+        vector_store.put(_memory("# Oncall\n\nlead\n\n## Draining\n\nStop."), _version())
+        actions = _chunk_index_actions(vector_store)
+        uploads = [a for a in actions if a["@search.action"] == "mergeOrUpload"]
+        assert uploads and all(len(a[VECTOR_FIELD]) == 4 for a in uploads)
+
+    def test_an_embedding_failure_surfaces_rather_than_writing_a_blind_chunk(self, vector_store):
+        """A chunk stored without its vector is invisible to vector recall and
+        nothing would ever say so. Fail the write instead."""
+        vector_store._embedder = FakeEmbedder(fail=True)
+        with pytest.raises(RuntimeError, match="unreachable"):
+            vector_store.put(_memory("# Oncall\n\nlead"), _version())
+
+
+class TestVectorIndexSchema:
+    def test_the_vector_field_is_absent_when_embeddings_are_not_configured(self):
+        schema = _chunks_schema("tacit-chunks", 0)
+        assert all(f["name"] != VECTOR_FIELD for f in schema["fields"])
+        assert "vectorSearch" not in schema
+
+    def test_the_vector_field_is_added_when_they_are(self):
+        schema = _chunks_schema("tacit-chunks", 1536)
+        field = next(f for f in schema["fields"] if f["name"] == VECTOR_FIELD)
+        assert field["dimensions"] == 1536
+        assert field["vectorSearchProfile"] == VECTOR_PROFILE
+        # A 1536-float array would dwarf the snippet it accompanies.
+        assert field["retrievable"] is False
+        assert schema["vectorSearch"]["profiles"][0]["name"] == VECTOR_PROFILE
+        # Text stays searchable: hybrid needs both halves in one index.
+        assert any(f["name"] == "content" and f.get("searchable") for f in schema["fields"])
 
 
 def test_category_filter_and_versions_escape_odata_quotes():

@@ -13,7 +13,11 @@ boundary, and only as far as ``scope`` and each memory's ``visibility`` allow.
 
 Search asks for the semantic ranker (L2 reranking + extractive captions) and
 falls back to plain BM25 when the service declines — semantic is a capacity
-feature, so a store must stay usable without it.
+feature, so a store must stay usable without it. When an embedding deployment
+is configured the same request also carries a vector query, making it a hybrid
+one: Azure fuses the keyword and vector candidates with RRF and the semantic
+ranker orders the result. Vectors degrade the same way semantic does, so an
+index without them, or a tier that refuses them, still answers.
 
 Note: AI Search indexing is near-real-time, not transactional — a doc becomes
 searchable within seconds of upload. ``get`` uses the lookup API (consistent),
@@ -40,7 +44,13 @@ from .models import (
 )
 from .ontology import Entity, Ontology
 from .scope import Viewer, odata_quote, parse_scope, scope_filter
-from .search_index import ONTOLOGY_INDEX, SCORING_PROFILE, SEMANTIC_CONFIG, index_names
+from .search_index import (
+    ONTOLOGY_INDEX,
+    SCORING_PROFILE,
+    SEMANTIC_CONFIG,
+    VECTOR_FIELD,
+    index_names,
+)
 from .sections import Section, narrow, snippet, split_sections
 
 SEARCH_FIELDS = "title,tags,heading,content,entity_vocabulary"
@@ -64,6 +74,7 @@ class SearchStore:
         credential: Any | None = None,
         *,
         viewer: Viewer | None = None,
+        embedder: Any | None = None,
     ) -> None:
         self._settings = settings
         self._endpoint = settings.search_endpoint.rstrip("/")
@@ -77,7 +88,8 @@ class SearchStore:
         self._viewer = viewer or Viewer(project=self.project, team=self.team)
         self._memories_index, self._versions_index, self._chunks_index = index_names()
         self._provisioned = False
-        self._semantic_ok = True
+        self._embedder = embedder if embedder is not None else settings.embedder(self._credential)
+        self._vectors = settings.vectors_enabled
         self._ontology: Ontology | None = None
 
     # -- scoping ---------------------------------------------------------------
@@ -208,15 +220,33 @@ class SearchStore:
                 for s in split_sections(memory.content)
             }
             actions = [a for a in actions if a["key"] not in live]
-            actions += [
-                {
-                    "@search.action": "mergeOrUpload",
-                    **_chunk_doc(memory, key, section, ontology),
-                }
-                for key, section in live.items()
+            docs = [
+                _chunk_doc(memory, key, section, ontology) for key, section in live.items()
             ]
+            for doc, vector in zip(docs, self._embed_sections(memory, list(live.values()))):
+                # Omitted rather than sent empty: the field is declared with a
+                # fixed dimension, so [] is rejected outright.
+                if vector:
+                    doc[VECTOR_FIELD] = vector
+            actions += [{"@search.action": "mergeOrUpload", **doc} for doc in docs]
         if actions:
             self._post(self._chunks_index, "/docs/search.index", {"value": actions})
+
+    def _embed_sections(self, memory: Memory, sections: list[Section]) -> list[list[float]]:
+        """One vector per section, or nothing when vectors are off.
+
+        The title is prepended to each section because sections are retrieved
+        independently: "## Draining" carries no clue that it is about the
+        payments gateway unless the memory's title travels with it.
+
+        This is the only place embeddings are computed. Queries are embedded by
+        the search service, but documents are pushed rather than crawled by an
+        indexer, so their vectors can only come from the writer.
+        """
+        if self._embedder is None or not sections:
+            return [[] for _ in sections]
+        inputs = [f"{memory.title}\n\n{s.heading}\n{s.text}".strip() for s in sections]
+        return self._embedder.embed(inputs)
 
     def visible_memories(self, scope: SearchScope | str | None = None) -> list[Memory]:
         """Every active memory the viewer may see, across projects.
@@ -345,6 +375,9 @@ class SearchStore:
             "filter": " and ".join(filters),
             "top": _overfetch(top),
         }
+        vector_query = self._vector_query(query)
+        if vector_query:
+            body["vectorQueries"] = [vector_query]
         result = self._search_ranked(body)
         scored: list[tuple[float, SearchHit]] = []
         for doc in (result or {}).get("value", []):
@@ -368,28 +401,45 @@ class SearchStore:
             scored.append((boosted, hit))
         return _best_per_memory(scored, top)
 
+    def _vector_query(self, query: str) -> dict | None:
+        """The vector half of a hybrid query, or None when vectors are off.
+
+        The query travels as plain text: the index's vectorizer embeds it, so
+        no model call happens in this process and only the search service needs
+        access to the deployment.
+
+        ``k`` is the reranker window rather than ``top``. Azure fuses the BM25
+        and vector candidate lists with RRF and hands at most 50 rows to the
+        semantic ranker, so a smaller ``k`` starves the stage that decides the
+        final order.
+        """
+        if not self._vectors:
+            return None
+        return {
+            "kind": "text",
+            "text": query,
+            "fields": VECTOR_FIELD,
+            "k": SEMANTIC_RERANK_WINDOW,
+        }
+
     def _search_ranked(self, body: dict) -> dict | None:
-        """Semantic first, BM25 if the service declines it. The downgrade is
-        sticky: one rejection means this store has no semantic capacity."""
-        if self._semantic_ok:
-            semantic = {
-                **body,
-                "queryType": "semantic",
-                "semanticConfiguration": SEMANTIC_CONFIG,
-                "captions": "extractive|highlight-false",
-            }
-            # A semantic query is reranked by the L2 model; a scoring profile
-            # only shapes the BM25 candidates it never sees.
-            semantic.pop("scoringProfile", None)
-            try:
-                return self._post(
-                    self._chunks_index, "/docs/search.post.search", semantic
-                )
-            except RuntimeError as exc:
-                if not _is_semantic_rejection(exc):
-                    raise
-                self._semantic_ok = False
-        return self._post(self._chunks_index, "/docs/search.post.search", body)
+        """Hybrid candidates, semantically reranked.
+
+        No capability probing: `tacit provision` creates this index with the
+        semantic configuration and the vector profile, so both are present by
+        construction. If either is missing the query fails loudly, which says
+        "run provision" instead of quietly halving recall.
+        """
+        semantic = {
+            **body,
+            "queryType": "semantic",
+            "semanticConfiguration": SEMANTIC_CONFIG,
+            "captions": "extractive|highlight-false",
+        }
+        # The L2 reranker orders the fused set; a scoring profile would only
+        # shape BM25 candidates it never sees.
+        semantic.pop("scoringProfile", None)
+        return self._post(self._chunks_index, "/docs/search.post.search", semantic)
 
     def versions(self, path: str) -> list[MemoryVersion]:
         result = self._post(
@@ -450,12 +500,6 @@ def _best_per_memory(scored: list[tuple[float, SearchHit]], top: int) -> list[Se
         if len(hits) >= top:
             break
     return hits
-
-
-def _is_semantic_rejection(exc: Exception) -> bool:
-    """Distinguish 'this service/tier cannot do semantic' from a real failure."""
-    text = str(exc).lower()
-    return "semantic" in text and ("400" in text or "403" in text or "not enabled" in text)
 
 
 def _extract_from(doc: dict, query: str) -> str:

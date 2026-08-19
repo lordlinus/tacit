@@ -17,8 +17,14 @@ same request with a narrower filter, and onboarding a team costs no indexes.
 
 The searchable indexes carry a semantic configuration (L2 reranking plus
 extractive captions) and a scoring profile that weights title and tags over
-body text and freshens recently updated memories — the same ranking bias the
-local backend applies, so both backends order results alike.
+body text and freshens recently updated memories.
+
+When an embedding deployment is configured, ``tacit-chunks`` also carries a
+``content_vector`` field, which turns every query into a hybrid one: BM25 and
+vector candidates fused by RRF, then semantically reranked. That is the
+combination Azure documents as the strongest for relevance, and it is what
+makes "the thing that rewrites webhook headers" find a memory that only ever
+says "lowercases the signature header".
 """
 
 from __future__ import annotations
@@ -28,6 +34,15 @@ from .config import Settings
 
 SEMANTIC_CONFIG = "tacit-semantic"
 SCORING_PROFILE = "tacit-relevance"
+VECTOR_PROFILE = "tacit-vector"
+VECTOR_ALGORITHM = "tacit-hnsw"
+VECTORIZER = "tacit-vectorizer"
+
+#: Field holding the section embedding. Present only when the deployment
+#: configures an embedding model; adding a field to a live index is one of the
+#: schema changes Azure applies without a rebuild, so switching vectors on
+#: later is a `provision` + `reindex`, not a migration.
+VECTOR_FIELD = "content_vector"
 
 #: The shared index set. Named once for the whole organization rather than per
 #: project, so one service hosts every team's memory.
@@ -187,10 +202,57 @@ def _entity_fields() -> list[dict]:
     ]
 
 
-def _chunks_schema(name: str) -> dict:
+def _vector_search(vectorizer: dict | None = None) -> dict:
+    """HNSW with cosine similarity — the default pairing for normalized
+    text embeddings, and the one text-embedding-3-* is trained for.
+
+    A vectorizer, when present, is what lets a query arrive as plain text: the
+    service embeds it. It is declared here but only ever used at query time —
+    indexing vectors still happens on the write path, because memories are
+    pushed rather than crawled by an indexer.
+    """
+    profile: dict = {"name": VECTOR_PROFILE, "algorithm": VECTOR_ALGORITHM}
+    config = {
+        "algorithms": [
+            {
+                "name": VECTOR_ALGORITHM,
+                "kind": "hnsw",
+                "hnswParameters": {"m": 4, "efConstruction": 400, "efSearch": 500,
+                                    "metric": "cosine"},
+            }
+        ],
+        "profiles": [profile],
+    }
+    if vectorizer:
+        profile["vectorizer"] = VECTORIZER
+        config["vectorizers"] = [vectorizer]
+    return config
+
+
+def azure_openai_vectorizer(endpoint: str, deployment: str, model: str) -> dict:
+    """Query-time embedding by the search service, over its own identity.
+
+    ``apiKey`` and ``authIdentity`` are both omitted deliberately: that is what
+    selects the search service's system-assigned identity, which needs
+    Cognitive Services OpenAI User on the target resource and nothing more.
+    """
+    return {
+        "name": VECTORIZER,
+        "kind": "azureOpenAI",
+        "azureOpenAIParameters": {
+            "resourceUri": endpoint.rstrip("/"),
+            "deploymentId": deployment,
+            "modelName": model,
+        },
+    }
+
+
+def _chunks_schema(
+    name: str, vector_dimensions: int = 0, vectorizer: dict | None = None
+) -> dict:
     """Derived: one doc per section of every active memory. Rebuilt from the
     memories index on every write, so it is disposable."""
-    return {
+    schema = {
         "name": name,
         "fields": [
             {"name": "key", "type": "Edm.String", "key": True, "filterable": True},
@@ -213,6 +275,20 @@ def _chunks_schema(name: str) -> dict:
         "scoringProfiles": _scoring_profiles(),
         "semantic": _semantic(["content", "heading"]),
     }
+    if vector_dimensions:
+        schema["fields"].append(
+            {
+                "name": VECTOR_FIELD,
+                "type": "Collection(Edm.Single)",
+                "searchable": True,
+                "retrievable": False,  # never returned: it would dwarf the hit
+                "stored": False,
+                "dimensions": vector_dimensions,
+                "vectorSearchProfile": VECTOR_PROFILE,
+            }
+        )
+        schema["vectorSearch"] = _vector_search(vectorizer)
+    return schema
 
 
 def _ontology_schema(name: str) -> dict:
@@ -234,8 +310,8 @@ def _ontology_schema(name: str) -> dict:
     }
 
 
-def provision(settings: Settings, credential) -> tuple[str, str, str]:
-    """Create (or update) the shared index set; returns their names.
+def provision(settings: Settings, credential) -> tuple[str, str, str, str]:
+    """Create (or update) the shared index set; returns every name it touched.
 
     Idempotent and project-independent: every project writes into the same
     indexes, so this runs once per Azure AI Search service rather than
@@ -244,10 +320,20 @@ def provision(settings: Settings, credential) -> tuple[str, str, str]:
     memories, versions, chunks = index_names()
     endpoint = settings.search_endpoint.rstrip("/")
     headers = search_headers(credential)
+    dimensions = settings.embedding_dimensions if settings.vectors_enabled else 0
+    vectorizer = (
+        azure_openai_vectorizer(
+            settings.embedding_endpoint,
+            settings.embedding_deployment,
+            settings.embedding_model,
+        )
+        if settings.vectors_enabled
+        else None
+    )
     for schema in (
         _memories_schema(memories),
         _versions_schema(versions),
-        _chunks_schema(chunks),
+        _chunks_schema(chunks, dimensions, vectorizer),
         _ontology_schema(ONTOLOGY_INDEX),
     ):
         request_json(
@@ -256,4 +342,4 @@ def provision(settings: Settings, credential) -> tuple[str, str, str]:
             headers=headers,
             body=schema,
         )
-    return memories, versions, chunks
+    return memories, versions, chunks, ONTOLOGY_INDEX

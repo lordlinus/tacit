@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from . import USER_AGENT
 
 SEARCH_SCOPE = "https://search.azure.com/.default"
+COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
 SEARCH_API_VERSION = "2024-07-01"
 
 
@@ -25,14 +26,18 @@ def build_credential(auth_mode: str = "default-credential", tenant_id: str = "")
     return DefaultAzureCredential()
 
 
-def search_headers(credential: Any) -> dict[str, str]:
-    token = credential.get_token(SEARCH_SCOPE).token
+def bearer_headers(credential: Any, scope: str) -> dict[str, str]:
+    token = credential.get_token(scope).token
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": USER_AGENT,
     }
+
+
+def search_headers(credential: Any) -> dict[str, str]:
+    return bearer_headers(credential, SEARCH_SCOPE)
 
 
 def request_json(

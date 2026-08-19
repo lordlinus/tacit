@@ -214,6 +214,7 @@ src/tacit/
     store.py         MemoryStore protocol
     search_store.py  Azure AI Search backend (keyless REST)
     search_index.py  shared index schemas + provision (create-if-missing)
+    embeddings.py    Azure OpenAI embeddings — the vector half of hybrid search
     service.py       validation, concurrency, tombstones, provenance stamping
     dream.py         consolidation: store + transcripts → new store
     tokens.py        token estimation (heuristic ~4 chars/token)
@@ -308,6 +309,50 @@ set. If a service tier declines semantic search, the store downgrades to BM25
 permanently for that process rather than failing the query — and the scoring
 profile, which the L2 reranker would otherwise never see, is applied on that
 path.
+
+**Hybrid, when an embedding deployment exists.** The vocabulary solves "we call
+it different things" only for names somebody thought to curate. Vectors cover
+the rest: a question about "the thing that rewrites webhook headers" reaching a
+memory that only ever says "lowercases the signature header". Each section is
+embedded with its memory's title prepended — sections are retrieved
+independently, and `## Draining` alone carries no clue what is being drained —
+and the same request then sends both a text query and a vector query, which
+Azure fuses with RRF before the semantic ranker orders the survivors. `k` is the
+reranker's 50-row window rather than `top`, because a smaller `k` starves the
+stage that decides the final order.
+
+Vectors are **opt-in**, and degrade in three separate places, because retrieval
+must never become the reason a memory is lost or a question goes unanswered:
+
+* no embedding endpoint configured — the field is never added to the index and
+  every query is exactly what it was before;
+* an embedding call fails *on write* — the chunk is stored without a vector
+  (omitted, not empty: the field has a fixed dimension) and is still findable by
+  BM25 and the ranker until the next `reindex`;
+* an embedding call fails *on query* — that one search runs text-only, and
+  deliberately does **not** stick, since a transient blip must not silently
+  halve retrieval quality for the life of the process.
+
+Only a rejection by the *service* is sticky, mirroring the semantic downgrade,
+and it unwinds in two steps because there are two distinct causes. An index that
+has the vector field but no vectorizer means "embed here instead"; an index with
+neither means "drop that half". A single flag for both would turn a missing
+vectorizer into a permanent loss of vector recall.
+
+**Who embeds, and why it differs by direction.** Queries use *integrated
+vectorization*: the index carries an `AzureOpenAIVectorizer`, so a question
+travels as plain text and the search service embeds it under its own managed
+identity. That keeps the embedding call off the agent's hot path and confines
+model access to one principal instead of every engineer's. Writes cannot work
+that way — index-time integrated vectorization requires an indexer and skillset
+over a crawlable data source, and memories are *pushed* through the documents
+API, which is what makes `content_sha256` preconditions possible in the first
+place. So section vectors are always computed by the writer. The asymmetry is
+inherent to the write model, not an oversight.
+
+That is also the upgrade path — adding a field is one of the schema changes
+Azure applies without a rebuild, so switching vectors on is `provision` +
+`reindex`, not a migration.
 
 **Results are over-fetched, then thinned.** Only the best section of each memory
 is returned, and home-project hits are boosted after the service ranks. Both
