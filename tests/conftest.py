@@ -20,6 +20,15 @@ import pytest
 FUNCTIONS_DIR = str(Path(__file__).resolve().parents[1] / "functions")
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_settings(monkeypatch):
+    """Settings read TACIT_* from the environment, so a developer who has
+    exported them for real use would otherwise get failures that depend on
+    their shell rather than on the code."""
+    for key in [k for k in os.environ if k.startswith("TACIT_")]:
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture(scope="session")
 def function_app(tmp_path_factory):
     """The imported Functions app module, registered exactly once."""

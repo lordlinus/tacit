@@ -1,0 +1,94 @@
+name: deploy-functions
+
+# Auto-deploy the MCP runtime when the code it serves changes.
+#
+# Deploys through azd rather than a direct Functions push, because azd runs the
+# `prepackage` hook in azure.yaml — scripts/sync_functions.sh vendors src/tacit
+# into functions/. Without that step the uploaded package has no tacit module
+# and every tool call fails at import.
+#
+# Auth is federated (OIDC): no publish profile, no secret, matching the keyless
+# posture of the rest of the project. See the repo README for the one-time
+# setup of the app registration and its federated credential.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "functions/**"
+      - "src/tacit/**"
+      - "azure.yaml"
+      - "scripts/sync_functions.sh"
+      - ".github/workflows/deploy-functions.yml"
+  workflow_dispatch:
+    inputs:
+      provision:
+        description: "Also run azd provision (infra changes)"
+        type: boolean
+        default: false
+
+# One deploy at a time; queued rather than cancelled, since cancelling mid-push
+# can leave the app on a half-uploaded package.
+concurrency:
+  group: deploy-functions
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv sync --extra dev --python 3.12
+      - run: uv run --extra dev pytest -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Azure/setup-azd@v2
+
+      - name: Sign in to azd (federated credentials)
+        run: |
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --federated-credential-provider github \
+            --tenant-id "$AZURE_TENANT_ID"
+
+      # The runner has no .azure/ directory, so the environment is recreated and
+      # then hydrated from the already-deployed infrastructure.
+      - name: Restore the azd environment
+        run: |
+          azd env new "$AZURE_ENV_NAME" \
+            --location "$AZURE_LOCATION" \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --no-prompt
+          azd env refresh --no-prompt
+
+      - name: Provision infrastructure
+        if: inputs.provision
+        run: azd provision --no-prompt
+
+      - name: Deploy
+        run: azd deploy api --no-prompt
+
+      - name: Report the endpoint
+        run: |
+          app=$(azd env get-value FUNCTION_APP_NAME)
+          echo "### Deployed \`$app\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "MCP endpoint: \`https://$app.azurewebsites.net/runtime/webhooks/mcp\`" >> "$GITHUB_STEP_SUMMARY"
