@@ -8,8 +8,10 @@ name: deploy-functions
 # and every tool call fails at import.
 #
 # Auth is federated (OIDC): no publish profile, no secret, matching the keyless
-# posture of the rest of the project. See the repo README for the one-time
-# setup of the app registration and its federated credential.
+# posture of the rest of the project. The federated credential matches the
+# branch subject, so the deploy job must not declare a GitHub `environment` —
+# that would make GitHub mint an environment-scoped subject instead, and the
+# token exchange would fail with AADSTS700213.
 
 on:
   push:
@@ -50,7 +52,6 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    environment: production
     env:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
