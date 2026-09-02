@@ -204,6 +204,7 @@ is "everything the org knows about this thing, whatever each team calls it".
 
 ```bash
 uv run tacit ui             # or /api/ui on the deployed Function App
+# Focus a shared store on a few teams: add ?projects=team-a,team-b (bookmarkable)
 ```
 
 Entities sit in the middle, the projects that wrote about them around the
@@ -217,6 +218,11 @@ The page also carries a **search box over the same `memory_search` tool an agent
 calls** — same scope, project, category and entity filters, same ranked sections,
 same "from *other-team*" badge when a hit crosses a boundary. It is the fastest
 way to see what your agents will actually get back.
+
+The Function App's root (`https://<app>.azurewebsites.net/`) serves a public,
+anonymous **story page** — the problem, the architecture, and how to configure
+and deploy — for teams evaluating tacit before they have a function key. It
+renders no tenant data and loads nothing from a CDN.
 
 ## Wire up your team
 

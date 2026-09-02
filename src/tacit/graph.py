@@ -25,9 +25,10 @@ rules as search.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 
-from .models import Memory
+from .models import Memory, validate_project
 from .ontology import Ontology
 
 #: Entities mentioned by no visible memory are dropped: a vocabulary entry
@@ -63,17 +64,38 @@ def project_node_id(project: str) -> str:
     return f"project:{project}"
 
 
+def parse_projects(raw: str) -> list[str]:
+    """Split a comma-separated ``projects`` query value into validated slugs.
+
+    Shared by both HTTP servers so the URL contract cannot drift between them.
+    Blank entries are dropped; a malformed slug raises ``ValueError`` so the
+    route can answer 400 rather than silently showing an unfiltered graph.
+    """
+    return sorted({validate_project(part.strip()) for part in raw.split(",") if part.strip()})
+
+
 def build_overlap_graph(
     memories: list[Memory],
     ontology: Ontology,
     *,
     home_project: str = "",
+    projects: Iterable[str] = (),
 ) -> dict:
     """Nodes, edges and per-entity drill-down for the visible memory set.
 
     ``home_project`` only marks which project the viewer is looking from, so
     the UI can orient itself; it grants nothing and filters nothing.
+
+    ``projects`` narrows the picture to those projects. It is applied *after*
+    visibility — ``memories`` is already the set the caller may see — so a
+    focus can only ever hide, never reveal. ``stats.visible_projects`` keeps
+    the full list so a UI can offer the filter without a second request.
     """
+    visible_projects = sorted({m.project for m in memories})
+    focus = sorted({validate_project(p) for p in projects})
+    if focus:
+        memories = [m for m in memories if m.project in focus]
+
     # entity id -> project -> [memory refs]
     hits: dict[str, dict[str, list[Memory]]] = defaultdict(lambda: defaultdict(list))
     project_totals: dict[str, int] = defaultdict(int)
@@ -165,5 +187,7 @@ def build_overlap_graph(
             "shared_entities": shared_entities,
             "vocabulary_size": len(ontology),
             "home_project": home_project,
+            "visible_projects": visible_projects,
+            "focus": focus,
         },
     }

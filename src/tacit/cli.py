@@ -349,8 +349,13 @@ def ui(
             if route in ("/", "/ui"):
                 self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif route in ("/graph", "/ui/graph"):
+                from .graph import parse_projects
+
                 self._json_or_error(
-                    lambda: service.graph(params.get("scope") or None)
+                    lambda: service.graph(
+                        params.get("scope") or None,
+                        projects=parse_projects(params.get("projects") or ""),
+                    )
                 )
             elif route in ("/search", "/ui/search"):
                 # Through call_tool, so the page sees exactly the hit shape an
@@ -362,6 +367,13 @@ def ui(
         def _json_or_error(self, produce) -> None:
             try:
                 payload = _json.dumps(produce(), ensure_ascii=False, default=str)
+            except ValueError as exc:
+                # Same contract as the Functions route: a bad argument is 400.
+                self._send(
+                    _json.dumps({"error": "invalid_argument", "detail": str(exc)}).encode("utf-8"),
+                    "application/json", 400,
+                )
+                return
             except Exception as exc:  # noqa: BLE001 - surfaced to the page
                 self._send(
                     _json.dumps({"error": str(exc)}).encode("utf-8"),

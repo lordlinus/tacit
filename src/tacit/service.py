@@ -13,9 +13,14 @@ team's private notes.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
-from .errors import DuplicatePathError, MemoryNotFoundError, ShaConflictError, StoreFullError
+from .errors import (
+    DuplicatePathError,
+    MemoryNotFoundError,
+    ShaConflictError,
+    StoreFullError,
+)
 from .models import (
     DEFAULT_PROJECT,
     Memory,
@@ -188,12 +193,18 @@ class MemoryService:
         """The organization's controlled vocabulary."""
         return self._store.load_ontology()
 
-    def graph(self, scope: SearchScope | str | None = None) -> dict:
+    def graph(
+        self,
+        scope: SearchScope | str | None = None,
+        *,
+        projects: Iterable[str] = (),
+    ) -> dict:
         """The cross-team overlap graph over everything this viewer may see.
 
         Built from :meth:`MemoryStore.visible_memories`, so it can never show a
         node, an edge or a count derived from a memory the caller could not
-        have found through search.
+        have found through search. ``projects`` focuses the picture on a subset
+        of what is visible — a lens, not a permission.
         """
         from .graph import build_overlap_graph
 
@@ -201,6 +212,7 @@ class MemoryService:
             self._store.visible_memories(scope),
             self._store.load_ontology(),
             home_project=self._project,
+            projects=projects,
         )
 
     def set_ontology(self, ontology) -> int:

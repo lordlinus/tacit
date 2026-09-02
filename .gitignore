@@ -7,3 +7,4 @@ __pycache__/
 functions/tacit/
 functions/local.settings.json
 .azure/
+demo/

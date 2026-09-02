@@ -15,7 +15,11 @@ MCP endpoint once deployed (Streamable HTTP — preferred; /sse is deprecated):
     https://<app>.azurewebsites.net/runtime/webhooks/mcp
     (header: x-functions-key = the mcp_extension system key)
 
-The app also serves a read-only overlap-graph UI over plain HTTP:
+The app also serves a public story page (problem, architecture, how to
+configure) at the API root, anonymously:
+    https://<app>.azurewebsites.net/api/
+and a read-only overlap-graph UI over plain HTTP, function-key gated since it
+renders tenant data:
     https://<app>.azurewebsites.net/api/ui?code=<function key>
 The page and its data come from the same origin, so no CORS configuration is
 needed, and the function key never leaves the URL the operator already has.
@@ -29,6 +33,8 @@ import os
 import azure.functions as func
 
 from tacit.config import ServiceRegistry, load_settings
+from tacit.graph import parse_projects
+from tacit.landing import PAGE as LANDING_PAGE
 from tacit.tools import TOOL_DEFINITIONS, call_tool
 from tacit.ui import PAGE
 
@@ -151,6 +157,30 @@ if _prompts_enabled():
 
 
 # --------------------------------------------------------------------------- #
+# Public story page (plain HTTP, anonymous — no tenant data, no CDN, no fetch)
+# --------------------------------------------------------------------------- #
+@app.function_name(name="landing")
+@app.route(route="", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def landing(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve the public story page: the problem, the architecture, how to configure.
+
+    Anonymous and CDN-free on purpose: this is what TEAM-ONBOARDING.md points a
+    new team at before they have a function key, so it must render without one
+    and without any external network call.
+    """
+    return func.HttpResponse(
+        LANDING_PAGE,
+        mimetype="text/html",
+        headers={
+            "Content-Security-Policy":
+                "default-src 'none'; script-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline'; img-src data:",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Read-only graph UI (plain HTTP, function-key auth, same origin as its data)
 # --------------------------------------------------------------------------- #
 @app.function_name(name="ui")
@@ -182,10 +212,16 @@ def graph(req: func.HttpRequest) -> func.HttpResponse:
     everywhere else it is a routing hint that grants nothing, and the graph is
     built from ``visible_memories``, which applies the same visibility rules as
     search. A private memory therefore contributes no node, edge or count.
+
+    ``projects`` (comma-separated slugs) focuses the graph on a subset of what
+    is visible, so a shared store can be shown one team at a time.
     """
     try:
         service = get_registry().get_service(req.params.get("project", "") or "")
-        payload = service.graph(req.params.get("scope") or None)
+        payload = service.graph(
+            req.params.get("scope") or None,
+            projects=parse_projects(req.params.get("projects") or ""),
+        )
     except ValueError as exc:
         return func.HttpResponse(
             json.dumps({"error": "invalid_argument", "detail": str(exc)}),

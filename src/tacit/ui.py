@@ -127,6 +127,12 @@ PAGE = """<!doctype html>
   .err { margin:16px 0; padding:13px 15px; border:1px solid #5a2530; background:#22131a;
          border-radius:9px; color:#ffb3c0; font-size:13px; }
   .spin { color:var(--faint); font-size:12px; padding:8px 0; }
+  .chips { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:2px 9px;
+          font-size:11px; color:var(--muted); background:var(--raised);
+          cursor:pointer; text-transform:none; letter-spacing:0; user-select:none; }
+  .chip:hover { border-color:var(--focus); }
+  .chip.on { border-color:var(--project); color:var(--ink); }
 </style>
 </head>
 <body>
@@ -150,6 +156,7 @@ PAGE = """<!doctype html>
   </label>
   <label class="f">project <select id="project"></select></label>
   <label class="f">category <select id="category"></select></label>
+  <label class="f">show <span class="chips" id="focus"></span></label>
 </div>
 
 <main>
@@ -168,7 +175,11 @@ PAGE = """<!doctype html>
 <script>
 // The function key travels in the query string on the deployed app; every
 // request this page makes has to carry it forward.
-const KEY = new URLSearchParams(location.search).get("code") || "";
+const QS = new URLSearchParams(location.search);
+const KEY = QS.get("code") || "";
+// Which projects to draw. Carried in the URL (`projects=a,b`) so a focused
+// view can be bookmarked — a shared store shown one team at a time.
+let FOCUS = (QS.get("projects") || "").split(",").filter(Boolean);
 const url = (path, params) => {
   const p = new URLSearchParams(params || {});
   if (KEY) p.set("code", KEY);
@@ -355,8 +366,31 @@ function fillSelect(id, values, current, blank) {
                     esc(v) + '</option>').join("");
 }
 
+function syncUrl() {
+  const p = new URLSearchParams(location.search);
+  if (FOCUS.length) p.set("projects", FOCUS.join(",")); else p.delete("projects");
+  if (el("project").value) p.set("project", el("project").value); else p.delete("project");
+  history.replaceState(null, "", location.pathname + "?" + p.toString());
+}
+
+function renderFocus(all) {
+  const chip = (label, on, value) =>
+    '<span class="chip' + (on ? ' on' : '') + '" data-p="' + esc(value) + '">' +
+    esc(label) + '</span>';
+  el("focus").innerHTML = chip("all", FOCUS.length === 0, "") +
+    all.map(p => chip(p, FOCUS.includes(p), p)).join("");
+  el("focus").querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+    const v = c.dataset.p;
+    if (!v) FOCUS = [];
+    else FOCUS = FOCUS.includes(v) ? FOCUS.filter(x => x !== v) : FOCUS.concat([v]);
+    syncUrl();
+    loadGraph();
+  }));
+}
+
 async function loadGraph() {
-  const params = { scope: el("scope").value, project: el("project").value };
+  const params = { scope: el("scope").value, project: el("project").value,
+                   projects: FOCUS.join(",") };
   let res;
   try {
     res = await fetch(url("graph", params));
@@ -375,7 +409,10 @@ async function loadGraph() {
   }
   GRAPH = await res.json();
   HOME = (GRAPH.stats || {}).home_project || "";
-  el("viewer").textContent = HOME ? "viewed from " + HOME : "";
+  const all = (GRAPH.stats || {}).visible_projects ||
+    GRAPH.nodes.filter(n => n.kind === "project").map(n => n.label);
+  el("viewer").textContent = (HOME ? "viewed from " + HOME : "") +
+    (FOCUS.length ? " · showing " + FOCUS.length + " of " + all.length + " projects" : "");
 
   const s = GRAPH.stats || {};
   el("stats").innerHTML = [
@@ -383,8 +420,10 @@ async function loadGraph() {
     ["entities", s.entities], ["shared", s.shared_entities],
   ].map(([k, v]) => '<li>' + k + '<b>' + (v == null ? "-" : v) + '</b></li>').join("");
 
-  const projects = GRAPH.nodes.filter(n => n.kind === "project").map(n => n.label);
-  fillSelect("project", projects, el("project").value, "all projects");
+  // Both pickers come from the unfiltered project list, so focusing on two
+  // projects does not make the other chips disappear.
+  fillSelect("project", all, el("project").value, "all projects");
+  renderFocus(all);
   renderGraph(GRAPH);
   // A filter change reloads the graph *and* re-runs the query; without this
   // guard the idle blurb would overwrite the results that just arrived.
@@ -419,7 +458,7 @@ el("q").addEventListener("input", () => {
   timer = setTimeout(runSearch, 280);
 });
 el("scope").addEventListener("change", () => { loadGraph(); runSearch(); });
-el("project").addEventListener("change", () => { loadGraph(); runSearch(); });
+el("project").addEventListener("change", () => { syncUrl(); loadGraph(); runSearch(); });
 el("category").addEventListener("change", runSearch);
 // Re-render rather than only re-centring: the panel moves below the graph at
 // the breakpoint, which changes the canvas aspect ratio entirely.
@@ -431,6 +470,10 @@ window.addEventListener("resize", () => {
 
 fillSelect("category",
   ["onboarding", "gotcha", "architecture", "convention", "general"], "", "any category");
+// `project=` in the URL picks the viewer before the first fetch; the full list
+// replaces this single option once the graph arrives.
+fillSelect("project", [QS.get("project") || ""].filter(Boolean), QS.get("project") || "",
+  "all projects");
 
 if (typeof d3 === "undefined") {
   el("panel").innerHTML = '<div class="err">D3 could not be loaded from the CDN, ' +
