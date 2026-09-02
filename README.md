@@ -167,6 +167,10 @@ request without granting its privileges, and a denied read reports `not_found`.
 > is Entra RBAC on the Search service plus the Functions key. Never store a
 > secret in a memory of any visibility.
 
+The three layers, what each one actually enforces, and the path to per-user
+identity over HTTP are drawn out in
+[docs/architecture.md § Access control](docs/architecture.md#12-access-control-three-layers).
+
 ## Seeing the overlap
 
 ```bash

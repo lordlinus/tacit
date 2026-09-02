@@ -18,8 +18,9 @@ was made; this document shows *how* it fits together.
 9. [Adoption loop](#9-adoption-loop)
 10. [Graceful degradation](#10-graceful-degradation)
 11. [Deployment topology](#11-deployment-topology)
-12. [Dream: consolidation](#12-dream-consolidation)
-13. [Repository map](#13-repository-map)
+12. [Access control: three layers](#12-access-control-three-layers)
+13. [Dream: consolidation](#13-dream-consolidation)
+14. [Repository map](#14-repository-map)
 
 ---
 
@@ -580,7 +581,83 @@ Two operational notes learned the hard way:
 
 ---
 
-## 12. Dream: consolidation
+## 12. Access control: three layers
+
+Only the first layer is authorization. The second is a shared secret. The third
+is a relevance boundary. Knowing which is which is what keeps a secret out of a
+memory.
+
+```mermaid
+flowchart TB
+    subgraph callers["Who is calling"]
+        ENG["Engineer via stdio<br/>tacit-mcp · tacit CLI"]
+        REM["Engineer via HTTP<br/>Copilot · Claude Code · Cursor"]
+    end
+
+    subgraph l2["Layer 2 — endpoint secret (Functions only)"]
+        KEY["x-functions-key = mcp_extension system key<br/>one shared secret · the app cannot tell callers apart"]
+        APPID["viewer = TACIT_PROJECT + TACIT_TEAM<br/>actor = TACIT_ACTOR<br/>both from app settings, not from the caller"]
+    end
+
+    subgraph l1["Layer 1 — Entra RBAC on Azure AI Search (the real boundary)"]
+        ROLES["Search Index Data Contributor — read/write documents<br/>Search Service Contributor — provision indexes"]
+        SEARCH["Azure AI Search<br/>disableLocalAuth · no API keys anywhere"]
+    end
+
+    subgraph l3["Layer 3 — visibility × scope × viewer (relevance, not RBAC)"]
+        VIS["org → anyone with access to the endpoint<br/>team → viewer's team only<br/>private → viewer's project only"]
+        NF["denied read → not_found"]
+    end
+
+    ENG -- "own Entra identity<br/>DefaultAzureCredential · az login" --> ROLES
+    REM -- "presents the key" --> KEY --> APPID
+    APPID -- "Function App managed identity" --> ROLES
+    ROLES --> SEARCH
+    SEARCH --> VIS --> NF
+
+    style l1 fill:#0f3d2e,stroke:#2ee6a8,color:#e8ecf4
+    style l2 fill:#3d2e0f,stroke:#ff9f43,color:#e8ecf4
+    style l3 fill:#1a1f3d,stroke:#7c8cff,color:#e8ecf4
+```
+
+| Layer | What it decides | Granularity today | Where it lives |
+| --- | --- | --- | --- |
+| **1. Entra RBAC on Search** | Whether a principal can read or write documents at all | Per engineer over stdio; one managed identity for the whole Function App | `infra/main.bicep` role assignments; `azure_common.build_credential` |
+| **2. Functions key** | Whether an HTTP caller reaches the MCP endpoint | One shared secret for everyone who holds it | Functions host; `TEAM-ONBOARDING.md` |
+| **3. Visibility × scope × viewer** | Which visible memories a request may return | Per *server configuration*: the viewer is `TACIT_PROJECT` + `TACIT_TEAM` | `scope.py`; `Memory.readable_by`; every read path |
+
+What follows from this, stated plainly:
+
+- **Over stdio, identity is real.** Each engineer authenticates to Search as
+  themselves, so Search RBAC and `created_by` are per person.
+- **Over the shared HTTP endpoint, identity is the deployment.** Every caller is
+  the same viewer and the same actor. `team` visibility has no effect unless the
+  app is configured with a team, and `created_by` names `TACIT_ACTOR`, not the
+  person. Provenance over HTTP identifies the deployment.
+- **`org` memories are reachable by anyone who can call the endpoint.** By
+  design. Never store a secret in a memory of any visibility.
+
+### Where per-user control would come from
+
+```mermaid
+flowchart LR
+    NOW["Today<br/>shared key · viewer and actor from app settings"]
+    OPT1["Per-team Function Apps<br/>same code · TACIT_TEAM, TACIT_ACTOR, key per team<br/>gives team visibility meaning · no code change"]
+    OPT2["Entra auth on the Function App<br/>OAuth from the MCP client · X-MS-CLIENT-PRINCIPAL<br/>actor = UPN · team = group claim → slug<br/>viewer built per request (build_service already takes one)"]
+    OPT3["On-behalf-of to Search<br/>Search RBAC applies per person<br/>strongest · hardest with the MCP extension · no MI-only deploys"]
+
+    NOW --> OPT1 --> OPT2 --> OPT3
+    style OPT2 fill:#1f6feb,color:#fff,stroke:#1f6feb
+```
+
+The recommended step is the second: the viewer abstraction already exists and
+`build_service(settings, viewer=...)` already accepts an override, so per-request
+identity is header parsing, a group-to-team mapping and a per-viewer service
+cache, not a storage change.
+
+---
+
+## 13. Dream: consolidation
 
 `tacit dream` curates a store into a **new** one, never modifying its input, so
 the result can be reviewed and discarded. The default consolidator is
@@ -602,7 +679,7 @@ flowchart LR
 
 ---
 
-## 13. Repository map
+## 14. Repository map
 
 ```
 src/tacit/
