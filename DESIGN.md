@@ -192,7 +192,7 @@ the rule that a `project` field appears only when the hit crossed a team
 boundary. A second serialization would be free to drift from the tool contract,
 and the drift would be invisible.
 
-## Invariants (inherited from PEMP)
+## Invariants
 
 1. Memory is **immutable**: update appends a version; delete writes a tombstone
    version. Nothing is erased; the versions index is the audit trail.
